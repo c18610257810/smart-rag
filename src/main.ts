@@ -55,7 +55,9 @@ const DEFAULT_SETTINGS: SmartRAGSettings = {
 	semanticChunkLLM: {
 		baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
 		apiKey: 'sk-sp-5dd6c4a0e3a545e0920e147687ca685a',
-		modelName: 'glm-5'
+		modelName: 'glm-5',
+		maxTokens: 1024,
+		temperature: 0.1
 	},
 	lightRAGEmbedding: {
 		baseUrl: 'http://127.0.0.1:1234',
@@ -519,6 +521,28 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.semanticChunkLLM.modelName)
 				.onChange(async (value) => {
 					this.plugin.settings.semanticChunkLLM.modelName = value;
+					this.showAutoSaveBadge();
+				}));
+
+		new Setting(container)
+			.setName('Max Tokens')
+			.setDesc('Maximum tokens for chunking analysis (1024 recommended)')
+			.addText(text => text
+				.setPlaceholder('1024')
+				.setValue(String(this.plugin.settings.semanticChunkLLM.maxTokens || ''))
+				.onChange(async (value) => {
+					this.plugin.settings.semanticChunkLLM.maxTokens = value ? parseInt(value) : undefined;
+					this.showAutoSaveBadge();
+				}));
+
+		new Setting(container)
+			.setName('Temperature')
+			.setDesc('Determinism for chunking (0.1-0.3 recommended for stable results)')
+			.addText(text => text
+				.setPlaceholder('0.1')
+				.setValue(String(this.plugin.settings.semanticChunkLLM.temperature || ''))
+				.onChange(async (value) => {
+					this.plugin.settings.semanticChunkLLM.temperature = value ? parseFloat(value) : undefined;
 					this.showAutoSaveBadge();
 				}));
 
