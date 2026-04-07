@@ -65,6 +65,8 @@ const DEFAULT_SETTINGS: SmartRAGSettings = {
 
 export default class SmartRAGPlugin extends Plugin {
 	settings: SmartRAGSettings;
+	statusBarItem: HTMLElement;
+	statusCheckInterval: number;
 
 	async onload() {
 		await this.loadSettings();
@@ -86,10 +88,24 @@ export default class SmartRAGPlugin extends Plugin {
 			}
 		});
 
+		// Add status bar item for LightRAG Server status
+		this.statusBarItem = this.addStatusBarItem();
+		this.statusBarItem.setText('RAG: Checking...');
+		this.updateStatusBar();
+
+		// Auto-refresh status every 5 seconds
+		this.statusCheckInterval = window.setInterval(() => {
+			this.updateStatusBar();
+		}, 5000);
+
 		console.log('Smart RAG plugin loaded - v0.1.0-skeleton');
 	}
 
 	onunload() {
+		// Clear interval
+		if (this.statusCheckInterval) {
+			window.clearInterval(this.statusCheckInterval);
+		}
 		console.log('Smart RAG plugin unloaded');
 	}
 
@@ -105,6 +121,82 @@ export default class SmartRAGPlugin extends Plugin {
 		// Phase 1: Simple right panel + input box
 		// TODO: Implement Lexical editor + multi-panel layout in Phase 4
 		console.log('Chat panel opened (placeholder - Phase 1 skeleton)');
+	}
+
+	async updateStatusBar() {
+		const status = await this.checkLightRAGServerStatus();
+		switch (status.status) {
+			case 'running':
+				this.statusBarItem.setText('RAG: ● Running');
+				this.statusBarItem.style.color = '#4CAF50';
+				break;
+			case 'busy':
+				this.statusBarItem.setText('RAG: ● Busy');
+				this.statusBarItem.style.color = '#FFC107';
+				break;
+			case 'stopped':
+				this.statusBarItem.setText('RAG: ○ Stopped');
+				this.statusBarItem.style.color = '#F44336';
+				break;
+		}
+	}
+
+	async checkLightRAGServerStatus(): Promise<{status: 'running' | 'busy' | 'stopped'}> {
+		try {
+			// 先检查进程是否存在
+			const { stdout } = await execAsync('ps aux | grep -v grep | grep lightrag-server');
+			if (!stdout.trim()) {
+				return { status: 'stopped' };
+			}
+
+			// 进程存在，检查健康状态
+			try {
+				const response = await fetch('http://127.0.0.1:9621/health');
+				if (response.ok) {
+					const data = await response.json();
+					// 如果 health API 返回 busy 状态
+					if (data.status === 'busy' || data.processing) {
+						return { status: 'busy' };
+					}
+					return { status: 'running' };
+				}
+				return { status: 'stopped' };
+			} catch (fetchError) {
+				// 进程存在但无法访问 API，可能正在启动中
+				return { status: 'busy' };
+			}
+		} catch (error) {
+			// 进程不存在
+			return { status: 'stopped' };
+		}
+	}
+
+	async startLightRAGServer(): Promise<void> {
+		// LightRAG 启动脚本路径
+		const startScript = '/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/start-lightrag.sh';
+		
+		try {
+			// 执行启动脚本
+			const { stdout, stderr } = await execAsync(`bash "${startScript}"`);
+			console.log('LightRAG Server started:', stdout);
+			if (stderr) {
+				console.warn('LightRAG Server stderr:', stderr);
+			}
+		} catch (error) {
+			console.error('Failed to start LightRAG Server:', error);
+			throw error;
+		}
+	}
+
+	async stopLightRAGServer(): Promise<void> {
+		try {
+			// 停止 LightRAG 服务器进程
+			await execAsync('pkill -f lightrag-server');
+			console.log('LightRAG Server stopped');
+		} catch (error) {
+			// pkill 如果没有找到进程会返回错误，这是正常的
+			console.log('No LightRAG Server process found or already stopped');
+		}
 	}
 }
 
@@ -347,7 +439,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 		
 		// 更新状态显示的函数
 		const updateStatus = async () => {
-			const status = await this.checkLightRAGServerStatus();
+			const status = await this.plugin.checkLightRAGServerStatus();
 			switch (status.status) {
 				case 'running':
 					statusEl.setText('● Running');
@@ -367,11 +459,8 @@ class SmartRAGSettingTab extends PluginSettingTab {
 		// 初始检查
 		updateStatus();
 		
-		// 定时刷新（每5秒）
-		const statusInterval = setInterval(updateStatus, 5000);
-		
-		// 页面关闭时清理定时器
-		this.register(() => clearInterval(statusInterval));
+		// 定时刷新（每5秒）- 使用 window.setInterval 而不是 this.register
+		const statusInterval = window.setInterval(updateStatus, 5000);
 
 		// Start/Stop buttons using Obsidian Setting API
 		new Setting(container)
@@ -382,7 +471,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setCta()
 				.onClick(async () => {
 					try {
-						await this.startLightRAGServer();
+						await this.plugin.startLightRAGServer();
 						new Notice('LightRAG server started!');
 						updateStatus();
 					} catch (error) {
@@ -394,7 +483,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setWarning()
 				.onClick(async () => {
 					try {
-						await this.stopLightRAGServer();
+						await this.plugin.stopLightRAGServer();
 						new Notice('LightRAG server stopped!');
 						updateStatus();
 					} catch (error) {
@@ -412,63 +501,5 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.lightRAGWorkingDir = value;
 				}));
-	}
-
-	async checkLightRAGServerStatus(): Promise<{status: 'running' | 'busy' | 'stopped'}> {
-		try {
-			// 先检查进程是否存在
-			const { stdout } = await execAsync('ps aux | grep -v grep | grep lightrag-server');
-			if (!stdout.trim()) {
-				return { status: 'stopped' };
-			}
-
-			// 进程存在，检查健康状态
-			try {
-				const response = await fetch('http://127.0.0.1:9621/health');
-				if (response.ok) {
-					const data = await response.json();
-					// 如果 health API 返回 busy 状态
-					if (data.status === 'busy' || data.processing) {
-						return { status: 'busy' };
-					}
-					return { status: 'running' };
-				}
-				return { status: 'stopped' };
-			} catch (fetchError) {
-				// 进程存在但无法访问 API，可能正在启动中
-				return { status: 'busy' };
-			}
-		} catch (error) {
-			// 进程不存在
-			return { status: 'stopped' };
-		}
-	}
-
-	async startLightRAGServer(): Promise<void> {
-		// LightRAG 启动脚本路径
-		const startScript = '/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/start-lightrag.sh';
-		
-		try {
-			// 执行启动脚本
-			const { stdout, stderr } = await execAsync(`bash "${startScript}"`);
-			console.log('LightRAG Server started:', stdout);
-			if (stderr) {
-				console.warn('LightRAG Server stderr:', stderr);
-			}
-		} catch (error) {
-			console.error('Failed to start LightRAG Server:', error);
-			throw error;
-		}
-	}
-
-	async stopLightRAGServer(): Promise<void> {
-		try {
-			// 停止 LightRAG 服务器进程
-			await execAsync('pkill -f lightrag-server');
-			console.log('LightRAG Server stopped');
-		} catch (error) {
-			// pkill 如果没有找到进程会返回错误，这是正常的
-			console.log('No LightRAG Server process found or already stopped');
-		}
 	}
 }

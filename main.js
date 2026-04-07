@@ -71,9 +71,18 @@ var SmartRAGPlugin = class extends import_obsidian.Plugin {
         this.openChatPanel();
       }
     });
+    this.statusBarItem = this.addStatusBarItem();
+    this.statusBarItem.setText("RAG: Checking...");
+    this.updateStatusBar();
+    this.statusCheckInterval = window.setInterval(() => {
+      this.updateStatusBar();
+    }, 5e3);
     console.log("Smart RAG plugin loaded - v0.1.0-skeleton");
   }
   onunload() {
+    if (this.statusCheckInterval) {
+      window.clearInterval(this.statusCheckInterval);
+    }
     console.log("Smart RAG plugin unloaded");
   }
   async loadSettings() {
@@ -84,6 +93,67 @@ var SmartRAGPlugin = class extends import_obsidian.Plugin {
   }
   openChatPanel() {
     console.log("Chat panel opened (placeholder - Phase 1 skeleton)");
+  }
+  async updateStatusBar() {
+    const status = await this.checkLightRAGServerStatus();
+    switch (status.status) {
+      case "running":
+        this.statusBarItem.setText("RAG: \u25CF Running");
+        this.statusBarItem.style.color = "#4CAF50";
+        break;
+      case "busy":
+        this.statusBarItem.setText("RAG: \u25CF Busy");
+        this.statusBarItem.style.color = "#FFC107";
+        break;
+      case "stopped":
+        this.statusBarItem.setText("RAG: \u25CB Stopped");
+        this.statusBarItem.style.color = "#F44336";
+        break;
+    }
+  }
+  async checkLightRAGServerStatus() {
+    try {
+      const { stdout } = await execAsync("ps aux | grep -v grep | grep lightrag-server");
+      if (!stdout.trim()) {
+        return { status: "stopped" };
+      }
+      try {
+        const response = await fetch("http://127.0.0.1:9621/health");
+        if (response.ok) {
+          const data = await response.json();
+          if (data.status === "busy" || data.processing) {
+            return { status: "busy" };
+          }
+          return { status: "running" };
+        }
+        return { status: "stopped" };
+      } catch (fetchError) {
+        return { status: "busy" };
+      }
+    } catch (error) {
+      return { status: "stopped" };
+    }
+  }
+  async startLightRAGServer() {
+    const startScript = "/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/start-lightrag.sh";
+    try {
+      const { stdout, stderr } = await execAsync(`bash "${startScript}"`);
+      console.log("LightRAG Server started:", stdout);
+      if (stderr) {
+        console.warn("LightRAG Server stderr:", stderr);
+      }
+    } catch (error) {
+      console.error("Failed to start LightRAG Server:", error);
+      throw error;
+    }
+  }
+  async stopLightRAGServer() {
+    try {
+      await execAsync("pkill -f lightrag-server");
+      console.log("LightRAG Server stopped");
+    } catch (error) {
+      console.log("No LightRAG Server process found or already stopped");
+    }
   }
 };
 var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
@@ -197,7 +267,7 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
     const statusEl = statusSetting.settingEl.createDiv("smart-rag-server-status");
     statusEl.setText("Checking...");
     const updateStatus = async () => {
-      const status = await this.checkLightRAGServerStatus();
+      const status = await this.plugin.checkLightRAGServerStatus();
       switch (status.status) {
         case "running":
           statusEl.setText("\u25CF Running");
@@ -214,11 +284,10 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
       }
     };
     updateStatus();
-    const statusInterval = setInterval(updateStatus, 5e3);
-    this.register(() => clearInterval(statusInterval));
+    const statusInterval = window.setInterval(updateStatus, 5e3);
     new import_obsidian.Setting(container).setName("Server Controls").setDesc("Start or stop the LightRAG server").addButton((btn) => btn.setButtonText("Start Server").setCta().onClick(async () => {
       try {
-        await this.startLightRAGServer();
+        await this.plugin.startLightRAGServer();
         new import_obsidian.Notice("LightRAG server started!");
         updateStatus();
       } catch (error) {
@@ -226,7 +295,7 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
       }
     })).addButton((btn) => btn.setButtonText("Stop Server").setWarning().onClick(async () => {
       try {
-        await this.stopLightRAGServer();
+        await this.plugin.stopLightRAGServer();
         new import_obsidian.Notice("LightRAG server stopped!");
         updateStatus();
       } catch (error) {
@@ -236,49 +305,5 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
     new import_obsidian.Setting(container).setName("LightRAG Working Directory").setDesc("Shared LightRAG data directory (shared with Neural Composer)").addText((text) => text.setPlaceholder("~/.openclaw/lightrag-data").setValue(this.plugin.settings.lightRAGWorkingDir).onChange(async (value) => {
       this.plugin.settings.lightRAGWorkingDir = value;
     }));
-  }
-  async checkLightRAGServerStatus() {
-    try {
-      const { stdout } = await execAsync("ps aux | grep -v grep | grep lightrag-server");
-      if (!stdout.trim()) {
-        return { status: "stopped" };
-      }
-      try {
-        const response = await fetch("http://127.0.0.1:9621/health");
-        if (response.ok) {
-          const data = await response.json();
-          if (data.status === "busy" || data.processing) {
-            return { status: "busy" };
-          }
-          return { status: "running" };
-        }
-        return { status: "stopped" };
-      } catch (fetchError) {
-        return { status: "busy" };
-      }
-    } catch (error) {
-      return { status: "stopped" };
-    }
-  }
-  async startLightRAGServer() {
-    const startScript = "/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/start-lightrag.sh";
-    try {
-      const { stdout, stderr } = await execAsync(`bash "${startScript}"`);
-      console.log("LightRAG Server started:", stdout);
-      if (stderr) {
-        console.warn("LightRAG Server stderr:", stderr);
-      }
-    } catch (error) {
-      console.error("Failed to start LightRAG Server:", error);
-      throw error;
-    }
-  }
-  async stopLightRAGServer() {
-    try {
-      await execAsync("pkill -f lightrag-server");
-      console.log("LightRAG Server stopped");
-    } catch (error) {
-      console.log("No LightRAG Server process found or already stopped");
-    }
   }
 };
