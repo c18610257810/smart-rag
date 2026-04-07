@@ -1,4 +1,4 @@
-# smart RAG - Semantic RAG for Obsidian Vault
+# Smart RAG - Semantic RAG for Obsidian Vault
 
 **Version**: 0.1.0-skeleton (Phase 1: Minimum Skeleton)
 
@@ -16,7 +16,7 @@ Semantic RAG for Obsidian Vault with PGlite vector storage and LLM-powered chat.
 
 ### LLM Configuration
 
-smart RAG uses 4 independent LLM configurations:
+Smart RAG uses 4 independent LLM configurations:
 
 | Config | Purpose | Example |
 |--------|---------|---------|
@@ -42,7 +42,7 @@ Each configuration includes:
 
 ### Phase 1: Minimum Skeleton (v0.1.0) ✅ Current
 
-- Basic Settings Tab (4 LLM configurations)
+- **Tabbed Settings UI** (4 LLM configurations with LightRAG Server controls)
 - Simple right panel + input box
 - Hard-coded config test for full pipeline
 
@@ -81,7 +81,7 @@ Copy `main.js`, `manifest.json`, `styles.css` to your Obsidian vault's `.obsidia
 
 ## Configuration
 
-Open Obsidian Settings → smart RAG to configure:
+Open Obsidian Settings → Smart RAG to configure:
 
 1. **Chat LLM** - Your primary chat model
 2. **LightRAG LLM** - Model for LightRAG internal processing

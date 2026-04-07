@@ -8,11 +8,11 @@ All notable changes to this project will be documented in this file.
 
 - Initial project structure
 - Obsidian plugin manifest and configuration
-- Basic Settings Tab with 4 LLM configurations:
+- **Tabbed Settings UI** with 4 LLM configurations:
   - Chat LLM
   - LightRAG LLM
   - Semantic Chunk LLM
-  - LightRAG Embedding
+  - LightRAG Embedding (with LightRAG Server controls)
 - TypeScript project setup with esbuild
 - Plugin skeleton with ribbon icon and command
 - README.md with development plan

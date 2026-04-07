@@ -1,6 +1,4 @@
-/* smart RAG - Styles */
-
-/* Placeholder for Phase 4 UI styles */
+/* Smart RAG - Styles */
 
 .smart-rag-container {
     padding: 20px;
@@ -23,4 +21,55 @@
     padding: 10px;
     background: var(--background-secondary);
     border-radius: 4px;
+}
+
+/* Tab styles */
+.smart-rag-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    padding-bottom: 10px;
+}
+
+.smart-rag-tab-button {
+    padding: 8px 16px;
+    background: var(--background-modifier-hover);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px 4px 0 0;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.smart-rag-tab-button:hover {
+    background: var(--background-modifier-active-hover);
+}
+
+.smart-rag-tab-button.smart-rag-tab-active {
+    background: var(--background-primary);
+    border-bottom: none;
+    font-weight: bold;
+}
+
+.smart-rag-tab-content {
+    padding: 20px;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 0 4px 4px 4px;
+}
+
+/* Server status styles */
+.smart-rag-server-status {
+    font-weight: bold;
+    margin: 5px 0;
+}
+
+.smart-rag-server-buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.smart-rag-server-buttons button {
+    flex: 1;
 }
