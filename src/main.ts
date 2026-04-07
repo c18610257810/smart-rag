@@ -163,7 +163,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				this.renderSemanticChunkSettings(contentContainer);
 				break;
 			case 'embedding':
-				this.renderEmbeddingSettings(contentContainer);
+				this.renderEmbeddingSettings(containerEl); // Use containerEl instead of contentContainer for proper setting integration
 				break;
 		}
 
@@ -373,38 +373,34 @@ class SmartRAGSettingTab extends PluginSettingTab {
 		// 页面关闭时清理定时器
 		this.register(() => clearInterval(statusInterval));
 
-		// Start/Stop buttons
-		const buttonContainer = container.createDiv('smart-rag-server-buttons');
-		
-		const startButton = buttonContainer.createEl('button', {
-			text: 'Start Server',
-			cls: 'mod-cta'
-		});
-		startButton.onclick = async () => {
-			try {
-				await this.startLightRAGServer();
-				new Notice('LightRAG server started!');
-				// 立即刷新状态
-				updateStatus();
-			} catch (error) {
-				new Notice(`Failed to start server: ${error.message}`);
-			}
-		};
-
-		const stopButton = buttonContainer.createEl('button', {
-			text: 'Stop Server',
-			cls: 'mod-warning'
-		});
-		stopButton.onclick = async () => {
-			try {
-				await this.stopLightRAGServer();
-				new Notice('LightRAG server stopped!');
-				// 立即刷新状态
-				updateStatus();
-			} catch (error) {
-				new Notice(`Failed to stop server: ${error.message}`);
-			}
-		};
+		// Start/Stop buttons using Obsidian Setting API
+		new Setting(container)
+			.setName('Server Controls')
+			.setDesc('Start or stop the LightRAG server')
+			.addButton(btn => btn
+				.setButtonText('Start Server')
+				.setCta()
+				.onClick(async () => {
+					try {
+						await this.startLightRAGServer();
+						new Notice('LightRAG server started!');
+						updateStatus();
+					} catch (error) {
+						new Notice(`Failed to start server: ${error.message}`);
+					}
+				}))
+			.addButton(btn => btn
+				.setButtonText('Stop Server')
+				.setWarning()
+				.onClick(async () => {
+					try {
+						await this.stopLightRAGServer();
+						new Notice('LightRAG server stopped!');
+						updateStatus();
+					} catch (error) {
+						new Notice(`Failed to stop server: ${error.message}`);
+					}
+				}));
 
 		// Working Directory
 		new Setting(container)

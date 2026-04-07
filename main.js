@@ -130,7 +130,7 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
         this.renderSemanticChunkSettings(contentContainer);
         break;
       case "embedding":
-        this.renderEmbeddingSettings(contentContainer);
+        this.renderEmbeddingSettings(containerEl);
         break;
     }
     new import_obsidian.Setting(containerEl).addButton((btn) => btn.setButtonText("Save Settings").setCta().onClick(async () => {
@@ -216,12 +216,7 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
     updateStatus();
     const statusInterval = setInterval(updateStatus, 5e3);
     this.register(() => clearInterval(statusInterval));
-    const buttonContainer = container.createDiv("smart-rag-server-buttons");
-    const startButton = buttonContainer.createEl("button", {
-      text: "Start Server",
-      cls: "mod-cta"
-    });
-    startButton.onclick = async () => {
+    new import_obsidian.Setting(container).setName("Server Controls").setDesc("Start or stop the LightRAG server").addButton((btn) => btn.setButtonText("Start Server").setCta().onClick(async () => {
       try {
         await this.startLightRAGServer();
         new import_obsidian.Notice("LightRAG server started!");
@@ -229,12 +224,7 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
       } catch (error) {
         new import_obsidian.Notice(`Failed to start server: ${error.message}`);
       }
-    };
-    const stopButton = buttonContainer.createEl("button", {
-      text: "Stop Server",
-      cls: "mod-warning"
-    });
-    stopButton.onclick = async () => {
+    })).addButton((btn) => btn.setButtonText("Stop Server").setWarning().onClick(async () => {
       try {
         await this.stopLightRAGServer();
         new import_obsidian.Notice("LightRAG server stopped!");
@@ -242,7 +232,7 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
       } catch (error) {
         new import_obsidian.Notice(`Failed to stop server: ${error.message}`);
       }
-    };
+    }));
     new import_obsidian.Setting(container).setName("LightRAG Working Directory").setDesc("Shared LightRAG data directory (shared with Neural Composer)").addText((text) => text.setPlaceholder("~/.openclaw/lightrag-data").setValue(this.plugin.settings.lightRAGWorkingDir).onChange(async (value) => {
       this.plugin.settings.lightRAGWorkingDir = value;
     }));
