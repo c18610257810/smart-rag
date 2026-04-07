@@ -134,7 +134,45 @@ var SmartRAGPlugin = class extends import_obsidian.Plugin {
       return { status: "stopped" };
     }
   }
+  async writeLightRAGConfig() {
+    const configPath = "/Users/frankzhang/.openclaw/lightrag-data/lightrag-config.json";
+    const config = {
+      server: {
+        host: "127.0.0.1",
+        port: 9621,
+        working_dir: this.settings.lightRAGWorkingDir.replace("~", process.env.HOME || "")
+      },
+      options: {
+        log_level: "INFO",
+        max_async: 4,
+        timeout: 1200,
+        chunking_strategy: "semantic"
+      },
+      llm: {
+        base_url: this.settings.lightRAGLLM.baseUrl,
+        api_key: this.settings.lightRAGLLM.apiKey,
+        api_key_env: "LLM_BINDING_API_KEY",
+        model: this.settings.lightRAGLLM.modelName,
+        provider: "custom",
+        binding: "openai",
+        temperature: 0.1,
+        max_tokens: this.settings.lightRAGLLM.maxTokens || 2048
+      },
+      embedding: {
+        base_url: this.settings.lightRAGEmbedding.baseUrl,
+        api_key: "lm-studio",
+        model: this.settings.lightRAGEmbedding.modelName,
+        provider: "custom",
+        binding: "openai",
+        dimension: this.settings.lightRAGEmbedding.dimension || 1024
+      }
+    };
+    const fs = require("fs");
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    console.log("LightRAG config written:", configPath);
+  }
   async startLightRAGServer() {
+    await this.writeLightRAGConfig();
     const startScript = "/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/start-lightrag.sh";
     try {
       const { stdout, stderr } = await execAsync(`bash "${startScript}"`);

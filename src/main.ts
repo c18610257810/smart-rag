@@ -171,7 +171,52 @@ export default class SmartRAGPlugin extends Plugin {
 		}
 	}
 
+	async writeLightRAGConfig(): Promise<void> {
+		const configPath = '/Users/frankzhang/.openclaw/lightrag-data/lightrag-config.json';
+		
+		// 从用户设置生成配置
+		const config = {
+			server: {
+				host: '127.0.0.1',
+				port: 9621,
+				working_dir: this.settings.lightRAGWorkingDir.replace('~', process.env.HOME || '')
+			},
+			options: {
+				log_level: 'INFO',
+				max_async: 4,
+				timeout: 1200,
+				chunking_strategy: 'semantic'
+			},
+			llm: {
+				base_url: this.settings.lightRAGLLM.baseUrl,
+				api_key: this.settings.lightRAGLLM.apiKey,
+				api_key_env: 'LLM_BINDING_API_KEY',
+				model: this.settings.lightRAGLLM.modelName,
+				provider: 'custom',
+				binding: 'openai',
+				temperature: 0.1,
+				max_tokens: this.settings.lightRAGLLM.maxTokens || 2048
+			},
+			embedding: {
+				base_url: this.settings.lightRAGEmbedding.baseUrl,
+				api_key: 'lm-studio',
+				model: this.settings.lightRAGEmbedding.modelName,
+				provider: 'custom',
+				binding: 'openai',
+				dimension: this.settings.lightRAGEmbedding.dimension || 1024
+			}
+		};
+
+		// 写入配置文件
+		const fs = require('fs');
+		fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+		console.log('LightRAG config written:', configPath);
+	}
+
 	async startLightRAGServer(): Promise<void> {
+		// 先写入配置
+		await this.writeLightRAGConfig();
+		
 		// LightRAG 启动脚本路径
 		const startScript = '/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/start-lightrag.sh';
 		
