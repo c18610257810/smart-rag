@@ -1,4 +1,8 @@
 import { App, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 /**
  * Smart RAG - Semantic RAG for Obsidian Vault
@@ -405,25 +409,30 @@ class SmartRAGSettingTab extends PluginSettingTab {
 	}
 
 	async startLightRAGServer(): Promise<void> {
-		// Execute start script
-		const workingDir = this.plugin.settings.lightRAGWorkingDir.replace('~', process.env.HOME || '');
-		const startScript = `${workingDir}/start-lightrag.sh`;
+		// LightRAG 启动脚本路径
+		const startScript = '/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/start-lightrag.sh';
 		
-		// In a real implementation, this would use Node.js child_process
-		// For now, we'll simulate it
-		console.log(`Starting LightRAG server with script: ${startScript}`);
-		
-		// Simulate server start delay
-		await new Promise(resolve => setTimeout(resolve, 2000));
+		try {
+			// 执行启动脚本
+			const { stdout, stderr } = await execAsync(`bash "${startScript}"`);
+			console.log('LightRAG Server started:', stdout);
+			if (stderr) {
+				console.warn('LightRAG Server stderr:', stderr);
+			}
+		} catch (error) {
+			console.error('Failed to start LightRAG Server:', error);
+			throw error;
+		}
 	}
 
 	async stopLightRAGServer(): Promise<void> {
-		// Kill LightRAG server process
-		// In a real implementation, this would use Node.js child_process
-		// For now, we'll simulate it
-		console.log('Stopping LightRAG server (pkill -f lightrag_server)');
-		
-		// Simulate server stop delay
-		await new Promise(resolve => setTimeout(resolve, 1000));
+		try {
+			// 停止 LightRAG 服务器进程
+			await execAsync('pkill -f lightrag-server');
+			console.log('LightRAG Server stopped');
+		} catch (error) {
+			// pkill 如果没有找到进程会返回错误，这是正常的
+			console.log('No LightRAG Server process found or already stopped');
+		}
 	}
 }

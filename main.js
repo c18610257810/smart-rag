@@ -29,6 +29,9 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
+var import_child_process = require("child_process");
+var import_util = require("util");
+var execAsync = (0, import_util.promisify)(import_child_process.exec);
 var DEFAULT_SETTINGS = {
   chatLLM: {
     baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
@@ -242,13 +245,24 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
     }
   }
   async startLightRAGServer() {
-    const workingDir = this.plugin.settings.lightRAGWorkingDir.replace("~", process.env.HOME || "");
-    const startScript = `${workingDir}/start-lightrag.sh`;
-    console.log(`Starting LightRAG server with script: ${startScript}`);
-    await new Promise((resolve) => setTimeout(resolve, 2e3));
+    const startScript = "/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/start-lightrag.sh";
+    try {
+      const { stdout, stderr } = await execAsync(`bash "${startScript}"`);
+      console.log("LightRAG Server started:", stdout);
+      if (stderr) {
+        console.warn("LightRAG Server stderr:", stderr);
+      }
+    } catch (error) {
+      console.error("Failed to start LightRAG Server:", error);
+      throw error;
+    }
   }
   async stopLightRAGServer() {
-    console.log("Stopping LightRAG server (pkill -f lightrag_server)");
-    await new Promise((resolve) => setTimeout(resolve, 1e3));
+    try {
+      await execAsync("pkill -f lightrag-server");
+      console.log("LightRAG Server stopped");
+    } catch (error) {
+      console.log("No LightRAG Server process found or already stopped");
+    }
   }
 };
