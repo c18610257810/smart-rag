@@ -1,6 +1,6 @@
 # Smart RAG - Semantic RAG for Obsidian Vault
 
-**Version**: 0.1.0-skeleton (Phase 1: Minimum Skeleton)
+**Version**: 0.2.0-config (Phase 2: Configuration System)
 
 Semantic RAG for Obsidian Vault with PGlite vector storage and LLM-powered chat.
 
@@ -11,6 +11,8 @@ Semantic RAG for Obsidian Vault with PGlite vector storage and LLM-powered chat.
 - 💬 **Chat Interface** - Rich text editor with @vault query support
 - 🔗 **LightRAG Integration** - Shared LightRAG Server for Graph RAG
 - ⚙️ **Flexible Configuration** - 4 independent LLM configurations
+- ✅ **Connection Testing** - Test each configuration with visual feedback
+- 🔄 **Auto-save** - Settings auto-save on input change
 
 ## Architecture
 
@@ -32,6 +34,13 @@ Each configuration includes:
 - Max Tokens (optional)
 - Temperature (optional)
 
+### Connection Testing
+
+Each configuration tab has a "Test Connection" button that:
+- ✅ **Success**: Shows model name and response time
+- ❌ **Failure**: Shows error details (network/auth/model error)
+- 🔍 **Embedding**: Also shows embedding dimension
+
 ### Data Storage
 
 - **PGlite** - Local vector storage in browser
@@ -40,17 +49,18 @@ Each configuration includes:
 
 ## Development Plan
 
-### Phase 1: Minimum Skeleton (v0.1.0) ✅ Current
+### Phase 1: Minimum Skeleton (v0.1.0) ✅ Complete
 
 - **Tabbed Settings UI** (4 LLM configurations with LightRAG Server controls)
 - Simple right panel + input box
 - Hard-coded config test for full pipeline
 
-### Phase 2: Configuration System (v0.2.0)
+### Phase 2: Configuration System (v0.2.0) ✅ Current
 
 - Configuration validation (connection test)
 - Configuration persistence (save/load)
 - Settings UI refinement
+- Auto-save on input change
 
 ### Phase 3: Core Features (v0.3.0)
 

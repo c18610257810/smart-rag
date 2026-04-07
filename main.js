@@ -31,7 +31,168 @@ module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var import_child_process = require("child_process");
 var import_util = require("util");
+
+// src/services/connectionTester.ts
+var ConnectionTester = class {
+  /**
+   * Test Chat/Semantic Chunk LLM connection
+   * Sends a simple completion request to verify API works
+   */
+  async testLLMConnection(baseUrl, apiKey, modelName) {
+    const startTime = Date.now();
+    try {
+      let normalizedUrl = baseUrl.replace(/\/+$/, "");
+      if (!normalizedUrl.endsWith("/v1")) {
+        normalizedUrl += "/v1";
+      }
+      const response = await fetch(`${normalizedUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: modelName,
+          messages: [{ role: "user", content: 'Say "OK" if you can hear me.' }],
+          max_tokens: 10
+        })
+      });
+      const responseTime = Date.now() - startTime;
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          success: false,
+          message: `API returned ${response.status}`,
+          details: {
+            error: errorText,
+            responseTime
+          }
+        };
+      }
+      const data = await response.json();
+      return {
+        success: true,
+        message: "Connection successful!",
+        details: {
+          model: data.model || modelName,
+          responseTime
+        }
+      };
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      return {
+        success: false,
+        message: "Connection failed",
+        details: {
+          error: error instanceof Error ? error.message : String(error),
+          responseTime
+        }
+      };
+    }
+  }
+  /**
+   * Test Embedding API connection
+   * Sends a test text to get embeddings
+   */
+  async testEmbeddingConnection(baseUrl, modelName) {
+    var _a, _b, _c;
+    const startTime = Date.now();
+    try {
+      let normalizedUrl = baseUrl.replace(/\/+$/, "");
+      if (!normalizedUrl.endsWith("/v1")) {
+        normalizedUrl += "/v1";
+      }
+      const response = await fetch(`${normalizedUrl}/embeddings`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: modelName,
+          input: "test"
+        })
+      });
+      const responseTime = Date.now() - startTime;
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          success: false,
+          message: `API returned ${response.status}`,
+          details: {
+            error: errorText,
+            responseTime
+          }
+        };
+      }
+      const data = await response.json();
+      const embeddingDim = ((_c = (_b = (_a = data.data) == null ? void 0 : _a[0]) == null ? void 0 : _b.embedding) == null ? void 0 : _c.length) || 0;
+      return {
+        success: true,
+        message: "Connection successful!",
+        details: {
+          model: data.model || modelName,
+          responseTime,
+          error: `Embedding dimension: ${embeddingDim}`
+        }
+      };
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      return {
+        success: false,
+        message: "Connection failed",
+        details: {
+          error: error instanceof Error ? error.message : String(error),
+          responseTime
+        }
+      };
+    }
+  }
+  /**
+   * Test LightRAG server health
+   */
+  async testLightRAGHealth() {
+    const startTime = Date.now();
+    try {
+      const response = await fetch("http://127.0.0.1:9621/health", {
+        method: "GET"
+      });
+      const responseTime = Date.now() - startTime;
+      if (!response.ok) {
+        return {
+          success: false,
+          message: `LightRAG server returned ${response.status}`,
+          details: {
+            responseTime
+          }
+        };
+      }
+      const data = await response.json();
+      return {
+        success: true,
+        message: "LightRAG server is healthy",
+        details: {
+          model: data.llm_model,
+          responseTime,
+          error: `Status: ${data.status}`
+        }
+      };
+    } catch (error) {
+      const responseTime = Date.now() - startTime;
+      return {
+        success: false,
+        message: "LightRAG server not reachable",
+        details: {
+          error: error instanceof Error ? error.message : "Server not running",
+          responseTime
+        }
+      };
+    }
+  }
+};
+
+// src/main.ts
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
+var connectionTester = new ConnectionTester();
 var DEFAULT_SETTINGS = {
   chatLLM: {
     baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
@@ -77,7 +238,7 @@ var SmartRAGPlugin = class extends import_obsidian.Plugin {
     this.statusCheckInterval = window.setInterval(() => {
       this.updateStatusBar();
     }, 5e3);
-    console.log("Smart RAG plugin loaded - v0.1.0-skeleton");
+    console.log("Smart RAG plugin loaded - v0.2.0-config");
   }
   onunload() {
     if (this.statusCheckInterval) {
@@ -200,7 +361,22 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.currentTab = "chat-llm";
+    this.autoSaveTimeout = null;
     this.plugin = plugin;
+  }
+  /**
+   * Show auto-save badge after input change
+  	 * Auto-saves settings after 1 second of no changes
+  	 */
+  showAutoSaveBadge() {
+    if (this.autoSaveTimeout) {
+      window.clearTimeout(this.autoSaveTimeout);
+    }
+    this.autoSaveTimeout = window.setTimeout(async () => {
+      await this.plugin.saveSettings();
+      new import_obsidian.Notice("\u2713 Auto-saved", 2e3);
+      this.autoSaveTimeout = null;
+    }, 1e3);
   }
   display() {
     const { containerEl } = this;
@@ -252,54 +428,147 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
     container.createEl("h3", { text: "Chat LLM Configuration" });
     new import_obsidian.Setting(container).setName("Base URL").setDesc("OpenAI-compatible API endpoint").addText((text) => text.setPlaceholder("https://api.example.com/v1").setValue(this.plugin.settings.chatLLM.baseUrl).onChange(async (value) => {
       this.plugin.settings.chatLLM.baseUrl = value;
+      this.showAutoSaveBadge();
     }));
     new import_obsidian.Setting(container).setName("API Key").setDesc("Authentication key for the API").addText((text) => text.setPlaceholder("sk-xxx").setValue(this.plugin.settings.chatLLM.apiKey).onChange(async (value) => {
       this.plugin.settings.chatLLM.apiKey = value;
+      this.showAutoSaveBadge();
     }));
     new import_obsidian.Setting(container).setName("Model Name").setDesc("Model identifier").addText((text) => text.setPlaceholder("model-name").setValue(this.plugin.settings.chatLLM.modelName).onChange(async (value) => {
       this.plugin.settings.chatLLM.modelName = value;
+      this.showAutoSaveBadge();
     }));
     new import_obsidian.Setting(container).setName("Max Tokens").setDesc("Maximum tokens for response").addText((text) => text.setPlaceholder("2048").setValue(String(this.plugin.settings.chatLLM.maxTokens || "")).onChange(async (value) => {
       this.plugin.settings.chatLLM.maxTokens = value ? parseInt(value) : void 0;
+      this.showAutoSaveBadge();
     }));
     new import_obsidian.Setting(container).setName("Temperature").setDesc("Response randomness (0.0-1.0)").addText((text) => text.setPlaceholder("0.7").setValue(String(this.plugin.settings.chatLLM.temperature || "")).onChange(async (value) => {
       this.plugin.settings.chatLLM.temperature = value ? parseFloat(value) : void 0;
+      this.showAutoSaveBadge();
+    }));
+    new import_obsidian.Setting(container).setName("Connection Test").setDesc("Test connection to Chat LLM API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
+      var _a, _b, _c;
+      btn.setButtonText("Testing...");
+      btn.setDisabled(true);
+      const result = await connectionTester.testLLMConnection(
+        this.plugin.settings.chatLLM.baseUrl,
+        this.plugin.settings.chatLLM.apiKey,
+        this.plugin.settings.chatLLM.modelName
+      );
+      btn.setButtonText("Test Connection");
+      btn.setDisabled(false);
+      if (result.success) {
+        new import_obsidian.Notice(`\u2705 ${result.message}
+Model: ${(_a = result.details) == null ? void 0 : _a.model}
+Response time: ${(_b = result.details) == null ? void 0 : _b.responseTime}ms`, 5e3);
+      } else {
+        new import_obsidian.Notice(`\u274C ${result.message}
+Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
+      }
     }));
   }
   renderLightRAGLLMSettings(container) {
     container.createEl("h3", { text: "LightRAG LLM Configuration" });
     new import_obsidian.Setting(container).setName("Base URL").setDesc("OpenAI-compatible API endpoint for LightRAG internal processing").addText((text) => text.setPlaceholder("https://api.example.com/v1").setValue(this.plugin.settings.lightRAGLLM.baseUrl).onChange(async (value) => {
       this.plugin.settings.lightRAGLLM.baseUrl = value;
+      this.showAutoSaveBadge();
     }));
     new import_obsidian.Setting(container).setName("API Key").setDesc("Authentication key for the API").addText((text) => text.setPlaceholder("sk-xxx").setValue(this.plugin.settings.lightRAGLLM.apiKey).onChange(async (value) => {
       this.plugin.settings.lightRAGLLM.apiKey = value;
+      this.showAutoSaveBadge();
     }));
     new import_obsidian.Setting(container).setName("Model Name").setDesc("Model identifier").addText((text) => text.setPlaceholder("model-name").setValue(this.plugin.settings.lightRAGLLM.modelName).onChange(async (value) => {
       this.plugin.settings.lightRAGLLM.modelName = value;
+      this.showAutoSaveBadge();
+    }));
+    new import_obsidian.Setting(container).setName("Connection Test").setDesc("Test connection to LightRAG LLM API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
+      var _a, _b, _c;
+      btn.setButtonText("Testing...");
+      btn.setDisabled(true);
+      const result = await connectionTester.testLLMConnection(
+        this.plugin.settings.lightRAGLLM.baseUrl,
+        this.plugin.settings.lightRAGLLM.apiKey,
+        this.plugin.settings.lightRAGLLM.modelName
+      );
+      btn.setButtonText("Test Connection");
+      btn.setDisabled(false);
+      if (result.success) {
+        new import_obsidian.Notice(`\u2705 ${result.message}
+Model: ${(_a = result.details) == null ? void 0 : _a.model}
+Response time: ${(_b = result.details) == null ? void 0 : _b.responseTime}ms`, 5e3);
+      } else {
+        new import_obsidian.Notice(`\u274C ${result.message}
+Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
+      }
     }));
   }
   renderSemanticChunkSettings(container) {
     container.createEl("h3", { text: "Semantic Chunk LLM Configuration" });
     new import_obsidian.Setting(container).setName("Base URL").setDesc("OpenAI-compatible API endpoint for semantic text chunking").addText((text) => text.setPlaceholder("https://api.example.com/v1").setValue(this.plugin.settings.semanticChunkLLM.baseUrl).onChange(async (value) => {
       this.plugin.settings.semanticChunkLLM.baseUrl = value;
+      this.showAutoSaveBadge();
     }));
     new import_obsidian.Setting(container).setName("API Key").setDesc("Authentication key for the API").addText((text) => text.setPlaceholder("sk-xxx").setValue(this.plugin.settings.semanticChunkLLM.apiKey).onChange(async (value) => {
       this.plugin.settings.semanticChunkLLM.apiKey = value;
+      this.showAutoSaveBadge();
     }));
     new import_obsidian.Setting(container).setName("Model Name").setDesc("Model identifier").addText((text) => text.setPlaceholder("model-name").setValue(this.plugin.settings.semanticChunkLLM.modelName).onChange(async (value) => {
       this.plugin.settings.semanticChunkLLM.modelName = value;
+      this.showAutoSaveBadge();
+    }));
+    new import_obsidian.Setting(container).setName("Connection Test").setDesc("Test connection to Semantic Chunk LLM API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
+      var _a, _b, _c;
+      btn.setButtonText("Testing...");
+      btn.setDisabled(true);
+      const result = await connectionTester.testLLMConnection(
+        this.plugin.settings.semanticChunkLLM.baseUrl,
+        this.plugin.settings.semanticChunkLLM.apiKey,
+        this.plugin.settings.semanticChunkLLM.modelName
+      );
+      btn.setButtonText("Test Connection");
+      btn.setDisabled(false);
+      if (result.success) {
+        new import_obsidian.Notice(`\u2705 ${result.message}
+Model: ${(_a = result.details) == null ? void 0 : _a.model}
+Response time: ${(_b = result.details) == null ? void 0 : _b.responseTime}ms`, 5e3);
+      } else {
+        new import_obsidian.Notice(`\u274C ${result.message}
+Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
+      }
     }));
   }
   renderEmbeddingSettings(container) {
     container.createEl("h3", { text: "LightRAG Embedding Configuration" });
     new import_obsidian.Setting(container).setName("Base URL").setDesc("Embedding API endpoint (e.g., LM Studio)").addText((text) => text.setPlaceholder("http://127.0.0.1:1234").setValue(this.plugin.settings.lightRAGEmbedding.baseUrl).onChange(async (value) => {
       this.plugin.settings.lightRAGEmbedding.baseUrl = value;
+      this.showAutoSaveBadge();
     }));
     new import_obsidian.Setting(container).setName("Model Name").setDesc("Embedding model identifier").addText((text) => text.setPlaceholder("text-embedding-bge-m3").setValue(this.plugin.settings.lightRAGEmbedding.modelName).onChange(async (value) => {
       this.plugin.settings.lightRAGEmbedding.modelName = value;
+      this.showAutoSaveBadge();
     }));
     new import_obsidian.Setting(container).setName("Dimension").setDesc("Vector dimension (e.g., 1024 for BGE-M3)").addText((text) => text.setPlaceholder("1024").setValue(String(this.plugin.settings.lightRAGEmbedding.dimension || "")).onChange(async (value) => {
       this.plugin.settings.lightRAGEmbedding.dimension = value ? parseInt(value) : void 0;
+      this.showAutoSaveBadge();
+    }));
+    new import_obsidian.Setting(container).setName("Connection Test").setDesc("Test connection to Embedding API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
+      var _a, _b, _c;
+      btn.setButtonText("Testing...");
+      btn.setDisabled(true);
+      const result = await connectionTester.testEmbeddingConnection(
+        this.plugin.settings.lightRAGEmbedding.baseUrl,
+        this.plugin.settings.lightRAGEmbedding.modelName
+      );
+      btn.setButtonText("Test Connection");
+      btn.setDisabled(false);
+      if (result.success) {
+        new import_obsidian.Notice(`\u2705 ${result.message}
+${(_a = result.details) == null ? void 0 : _a.error}
+Response time: ${(_b = result.details) == null ? void 0 : _b.responseTime}ms`, 5e3);
+      } else {
+        new import_obsidian.Notice(`\u274C ${result.message}
+Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
+      }
     }));
     container.createEl("hr");
     container.createEl("h4", { text: "\u2699\uFE0F LightRAG Server" });

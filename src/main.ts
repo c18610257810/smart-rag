@@ -1,8 +1,10 @@
 import { App, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { ConnectionTester } from './services/connectionTester';
 
 const execAsync = promisify(exec);
+const connectionTester = new ConnectionTester();
 
 /**
  * Smart RAG - Semantic RAG for Obsidian Vault
@@ -98,7 +100,7 @@ export default class SmartRAGPlugin extends Plugin {
 			this.updateStatusBar();
 		}, 5000);
 
-		console.log('Smart RAG plugin loaded - v0.1.0-skeleton');
+		console.log('Smart RAG plugin loaded - v0.2.0-config');
 	}
 
 	onunload() {
@@ -250,10 +252,29 @@ export default class SmartRAGPlugin extends Plugin {
 class SmartRAGSettingTab extends PluginSettingTab {
 	plugin: SmartRAGPlugin;
 	currentTab: string = 'chat-llm';
+	autoSaveTimeout: number | null = null;
 
 	constructor(app: App, plugin: SmartRAGPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
+	}
+
+	/**
+	 * Show auto-save badge after input change
+		 * Auto-saves settings after 1 second of no changes
+		 */
+	showAutoSaveBadge(): void {
+		// Clear previous timeout
+		if (this.autoSaveTimeout) {
+			window.clearTimeout(this.autoSaveTimeout);
+		}
+
+		// Auto-save after 1 second
+		this.autoSaveTimeout = window.setTimeout(async () => {
+			await this.plugin.saveSettings();
+			new Notice('✓ Auto-saved', 2000);
+			this.autoSaveTimeout = null;
+		}, 1000);
 	}
 
 	display(): void {
@@ -328,6 +349,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.chatLLM.baseUrl)
 				.onChange(async (value) => {
 					this.plugin.settings.chatLLM.baseUrl = value;
+					this.showAutoSaveBadge();
 				}));
 
 		new Setting(container)
@@ -338,6 +360,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.chatLLM.apiKey)
 				.onChange(async (value) => {
 					this.plugin.settings.chatLLM.apiKey = value;
+					this.showAutoSaveBadge();
 				}));
 
 		new Setting(container)
@@ -348,6 +371,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.chatLLM.modelName)
 				.onChange(async (value) => {
 					this.plugin.settings.chatLLM.modelName = value;
+					this.showAutoSaveBadge();
 				}));
 
 		new Setting(container)
@@ -358,6 +382,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(String(this.plugin.settings.chatLLM.maxTokens || ''))
 				.onChange(async (value) => {
 					this.plugin.settings.chatLLM.maxTokens = value ? parseInt(value) : undefined;
+					this.showAutoSaveBadge();
 				}));
 
 		new Setting(container)
@@ -368,6 +393,33 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(String(this.plugin.settings.chatLLM.temperature || ''))
 				.onChange(async (value) => {
 					this.plugin.settings.chatLLM.temperature = value ? parseFloat(value) : undefined;
+					this.showAutoSaveBadge();
+				}));
+
+		// Test Connection button
+		new Setting(container)
+			.setName('Connection Test')
+			.setDesc('Test connection to Chat LLM API')
+			.addButton(btn => btn
+				.setButtonText('Test Connection')
+				.onClick(async () => {
+					btn.setButtonText('Testing...');
+					btn.setDisabled(true);
+					
+					const result = await connectionTester.testLLMConnection(
+						this.plugin.settings.chatLLM.baseUrl,
+						this.plugin.settings.chatLLM.apiKey,
+						this.plugin.settings.chatLLM.modelName
+					);
+					
+					btn.setButtonText('Test Connection');
+					btn.setDisabled(false);
+					
+					if (result.success) {
+						new Notice(`✅ ${result.message}\nModel: ${result.details?.model}\nResponse time: ${result.details?.responseTime}ms`, 5000);
+					} else {
+						new Notice(`❌ ${result.message}\nError: ${result.details?.error}`, 8000);
+					}
 				}));
 	}
 
@@ -382,6 +434,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.lightRAGLLM.baseUrl)
 				.onChange(async (value) => {
 					this.plugin.settings.lightRAGLLM.baseUrl = value;
+					this.showAutoSaveBadge();
 				}));
 
 		new Setting(container)
@@ -392,6 +445,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.lightRAGLLM.apiKey)
 				.onChange(async (value) => {
 					this.plugin.settings.lightRAGLLM.apiKey = value;
+					this.showAutoSaveBadge();
 				}));
 
 		new Setting(container)
@@ -402,6 +456,33 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.lightRAGLLM.modelName)
 				.onChange(async (value) => {
 					this.plugin.settings.lightRAGLLM.modelName = value;
+					this.showAutoSaveBadge();
+				}));
+
+		// Test Connection button
+		new Setting(container)
+			.setName('Connection Test')
+			.setDesc('Test connection to LightRAG LLM API')
+			.addButton(btn => btn
+				.setButtonText('Test Connection')
+				.onClick(async () => {
+					btn.setButtonText('Testing...');
+					btn.setDisabled(true);
+					
+					const result = await connectionTester.testLLMConnection(
+						this.plugin.settings.lightRAGLLM.baseUrl,
+						this.plugin.settings.lightRAGLLM.apiKey,
+						this.plugin.settings.lightRAGLLM.modelName
+					);
+					
+					btn.setButtonText('Test Connection');
+					btn.setDisabled(false);
+					
+					if (result.success) {
+						new Notice(`✅ ${result.message}\nModel: ${result.details?.model}\nResponse time: ${result.details?.responseTime}ms`, 5000);
+					} else {
+						new Notice(`❌ ${result.message}\nError: ${result.details?.error}`, 8000);
+					}
 				}));
 	}
 
@@ -416,6 +497,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.semanticChunkLLM.baseUrl)
 				.onChange(async (value) => {
 					this.plugin.settings.semanticChunkLLM.baseUrl = value;
+					this.showAutoSaveBadge();
 				}));
 
 		new Setting(container)
@@ -426,6 +508,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.semanticChunkLLM.apiKey)
 				.onChange(async (value) => {
 					this.plugin.settings.semanticChunkLLM.apiKey = value;
+					this.showAutoSaveBadge();
 				}));
 
 		new Setting(container)
@@ -436,6 +519,33 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.semanticChunkLLM.modelName)
 				.onChange(async (value) => {
 					this.plugin.settings.semanticChunkLLM.modelName = value;
+					this.showAutoSaveBadge();
+				}));
+
+		// Test Connection button
+		new Setting(container)
+			.setName('Connection Test')
+			.setDesc('Test connection to Semantic Chunk LLM API')
+			.addButton(btn => btn
+				.setButtonText('Test Connection')
+				.onClick(async () => {
+					btn.setButtonText('Testing...');
+					btn.setDisabled(true);
+					
+					const result = await connectionTester.testLLMConnection(
+						this.plugin.settings.semanticChunkLLM.baseUrl,
+						this.plugin.settings.semanticChunkLLM.apiKey,
+						this.plugin.settings.semanticChunkLLM.modelName
+					);
+					
+					btn.setButtonText('Test Connection');
+					btn.setDisabled(false);
+					
+					if (result.success) {
+						new Notice(`✅ ${result.message}\nModel: ${result.details?.model}\nResponse time: ${result.details?.responseTime}ms`, 5000);
+					} else {
+						new Notice(`❌ ${result.message}\nError: ${result.details?.error}`, 8000);
+					}
 				}));
 	}
 
@@ -450,6 +560,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.lightRAGEmbedding.baseUrl)
 				.onChange(async (value) => {
 					this.plugin.settings.lightRAGEmbedding.baseUrl = value;
+					this.showAutoSaveBadge();
 				}));
 
 		new Setting(container)
@@ -460,6 +571,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.lightRAGEmbedding.modelName)
 				.onChange(async (value) => {
 					this.plugin.settings.lightRAGEmbedding.modelName = value;
+					this.showAutoSaveBadge();
 				}));
 
 		new Setting(container)
@@ -470,6 +582,32 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(String(this.plugin.settings.lightRAGEmbedding.dimension || ''))
 				.onChange(async (value) => {
 					this.plugin.settings.lightRAGEmbedding.dimension = value ? parseInt(value) : undefined;
+					this.showAutoSaveBadge();
+				}));
+
+		// Test Embedding Connection button
+		new Setting(container)
+			.setName('Connection Test')
+			.setDesc('Test connection to Embedding API')
+			.addButton(btn => btn
+				.setButtonText('Test Connection')
+				.onClick(async () => {
+					btn.setButtonText('Testing...');
+					btn.setDisabled(true);
+					
+					const result = await connectionTester.testEmbeddingConnection(
+						this.plugin.settings.lightRAGEmbedding.baseUrl,
+						this.plugin.settings.lightRAGEmbedding.modelName
+					);
+					
+					btn.setButtonText('Test Connection');
+					btn.setDisabled(false);
+					
+					if (result.success) {
+						new Notice(`✅ ${result.message}\n${result.details?.error}\nResponse time: ${result.details?.responseTime}ms`, 5000);
+					} else {
+						new Notice(`❌ ${result.message}\nError: ${result.details?.error}`, 8000);
+					}
 				}));
 
 		// LightRAG Server Controls
