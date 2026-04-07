@@ -175,7 +175,7 @@ export default class SmartRAGPlugin extends Plugin {
 		// 配置文件路径必须与启动脚本一致
 		const configPath = '/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/lightrag-config.json';
 		
-n		// 从用户设置生成配置
+		// 从用户设置生成配置
 		const config = {
 			server: {
 				host: '127.0.0.1',

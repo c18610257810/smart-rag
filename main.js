@@ -136,7 +136,6 @@ var SmartRAGPlugin = class extends import_obsidian.Plugin {
   }
   async writeLightRAGConfig() {
     const configPath = "/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/lightrag-config.json";
-    n;
     const config = {
       server: {
         host: "127.0.0.1",
