@@ -135,7 +135,8 @@ var SmartRAGPlugin = class extends import_obsidian.Plugin {
     }
   }
   async writeLightRAGConfig() {
-    const configPath = "/Users/frankzhang/.openclaw/lightrag-data/lightrag-config.json";
+    const configPath = "/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/lightrag-config.json";
+    n;
     const config = {
       server: {
         host: "127.0.0.1",
@@ -150,8 +151,8 @@ var SmartRAGPlugin = class extends import_obsidian.Plugin {
       },
       llm: {
         base_url: this.settings.lightRAGLLM.baseUrl,
-        api_key: this.settings.lightRAGLLM.apiKey,
-        api_key_env: "LLM_BINDING_API_KEY",
+        api_key_env: this.settings.lightRAGLLM.apiKey,
+        // 启动脚本读取 api_key_env
         model: this.settings.lightRAGLLM.modelName,
         provider: "custom",
         binding: "openai",
@@ -160,7 +161,8 @@ var SmartRAGPlugin = class extends import_obsidian.Plugin {
       },
       embedding: {
         base_url: this.settings.lightRAGEmbedding.baseUrl,
-        api_key: "lm-studio",
+        api_key_env: "lm-studio",
+        // Embedding 通常不需要 API key
         model: this.settings.lightRAGEmbedding.modelName,
         provider: "custom",
         binding: "openai",
@@ -170,6 +172,7 @@ var SmartRAGPlugin = class extends import_obsidian.Plugin {
     const fs = require("fs");
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
     console.log("LightRAG config written:", configPath);
+    console.log("Config:", JSON.stringify(config, null, 2));
   }
   async startLightRAGServer() {
     await this.writeLightRAGConfig();
