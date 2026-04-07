@@ -1,0 +1,26 @@
+/* smart RAG - Styles */
+
+/* Placeholder for Phase 4 UI styles */
+
+.smart-rag-container {
+    padding: 20px;
+}
+
+.smart-rag-chat-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.smart-rag-input-box {
+    padding: 10px;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+}
+
+.smart-rag-settings-group {
+    margin-bottom: 20px;
+    padding: 10px;
+    background: var(--background-secondary);
+    border-radius: 4px;
+}

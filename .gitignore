@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.js
+*.js.map
+
+# Keep main.js (Obsidian expects it at root)
+!main.js
+
+# IDE
+.vscode/
+.idea/
+
+# Secrets
+.env
+*.key
+*secret*
+credentials/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test
+test/
+*.test.ts
+
+# Temporary
+*.tmp
+*.temp
+
+# Obsidian
+data.json
