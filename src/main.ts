@@ -2,6 +2,7 @@ import { App, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { ConnectionTester } from './services/connectionTester';
+import { ChatPanel } from './ui/ChatPanel';
 
 const execAsync = promisify(exec);
 const connectionTester = new ConnectionTester();
@@ -102,7 +103,7 @@ export default class SmartRAGPlugin extends Plugin {
 			this.updateStatusBar();
 		}, 5000);
 
-		console.log('Smart RAG plugin loaded - v0.2.0-config');
+		console.log('Smart RAG plugin loaded - v0.3.0-chat');
 	}
 
 	onunload() {
@@ -122,9 +123,8 @@ export default class SmartRAGPlugin extends Plugin {
 	}
 
 	openChatPanel() {
-		// Phase 1: Simple right panel + input box
-		// TODO: Implement Lexical editor + multi-panel layout in Phase 4
-		console.log('Chat panel opened (placeholder - Phase 1 skeleton)');
+		const chatPanel = new ChatPanel(this.app, this);
+		chatPanel.open();
 	}
 
 	async updateStatusBar() {

@@ -1,6 +1,6 @@
 {
   "name": "smart-rag",
-  "version": "0.2.0-config",
+  "version": "0.3.0-chat",
   "description": "Smart RAG - Semantic RAG for Obsidian Vault with PGlite vector storage and LLM-powered chat",
   "main": "main.js",
   "scripts": {

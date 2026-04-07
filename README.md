@@ -1,6 +1,6 @@
 # Smart RAG - Semantic RAG for Obsidian Vault
 
-**Version**: 0.2.0-config (Phase 2: Configuration System)
+**Version**: 0.3.0-chat (Step 1: Basic Chat Panel)
 
 Semantic RAG for Obsidian Vault with PGlite vector storage and LLM-powered chat.
 
@@ -13,6 +13,7 @@ Semantic RAG for Obsidian Vault with PGlite vector storage and LLM-powered chat.
 - ⚙️ **Flexible Configuration** - 4 independent LLM configurations
 - ✅ **Connection Testing** - Test each configuration with visual feedback
 - 🔄 **Auto-save** - Settings auto-save on input change
+- 💬 **Chat Panel** - Basic chat interface with Markdown rendering
 
 ## Architecture
 
@@ -62,13 +63,32 @@ Each configuration tab has a "Test Connection" button that:
 - Settings UI refinement
 - Auto-save on input change
 
-### Phase 3: Core Features (v0.3.0)
+### Step 1: Basic Chat Panel (v0.3.0) ✅ Current
 
-- PGlite database + Drizzle ORM
-- Semantic chunking service
-- Vector search logic
+- **Right-side panel** with Markdown rendering
+- **Input box** + Send button
+- **Chat LLM integration** - Generate responses
+- **Conversation history** display
 
-### Phase 4: Full UI (v0.4.0)
+### Step 2: PGlite Database (v0.3.1)
+
+- PGlite initialization
+- Drizzle ORM Schema (documents, chunks)
+- Vector storage and query
+
+### Step 3: Semantic Chunking (v0.3.2)
+
+- Semantic Chunk LLM integration
+- Text chunking logic
+- Store chunks to PGlite
+
+### Step 4: RAG Query Integration (v0.3.3)
+
+- `@vault` trigger for vector search
+- Search results injection to prompt
+- Context-based response generation
+
+### Step 5: UI Enhancement (v0.4.0)
 
 - Lexical editor integration
 - Multi-panel layout

@@ -28,7 +28,7 @@ __export(main_exports, {
   default: () => SmartRAGPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian2 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 var import_child_process = require("child_process");
 var import_util = require("util");
 
@@ -192,6 +192,178 @@ var ConnectionTester = class {
   }
 };
 
+// src/ui/ChatPanel.ts
+var import_obsidian3 = require("obsidian");
+
+// src/services/llm.ts
+var import_obsidian2 = require("obsidian");
+var LLMService = class {
+  /**
+   * Send chat completion request
+   */
+  async chatCompletion(options) {
+    var _a, _b, _c;
+    const { baseUrl, apiKey, modelName, messages, maxTokens, temperature } = options;
+    let normalizedUrl = baseUrl.replace(/\/+$/, "");
+    if (!normalizedUrl.endsWith("/v1")) {
+      normalizedUrl += "/v1";
+    }
+    const requestBody = {
+      model: modelName,
+      messages
+    };
+    if (maxTokens) requestBody.max_tokens = maxTokens;
+    if (temperature !== void 0) requestBody.temperature = temperature;
+    try {
+      const response = await (0, import_obsidian2.requestUrl)({
+        url: `${normalizedUrl}/chat/completions`,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(requestBody)
+      });
+      if (response.status !== 200) {
+        throw new Error(`API returned ${response.status}: ${response.text}`);
+      }
+      const data = response.json;
+      const content = ((_c = (_b = (_a = data.choices) == null ? void 0 : _a[0]) == null ? void 0 : _b.message) == null ? void 0 : _c.content) || "";
+      return {
+        content,
+        model: data.model || modelName,
+        usage: data.usage ? {
+          promptTokens: data.usage.prompt_tokens,
+          completionTokens: data.usage.completion_tokens,
+          totalTokens: data.usage.total_tokens
+        } : void 0
+      };
+    } catch (error) {
+      throw new Error(`Chat completion failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  /**
+   * Simple chat with context
+   */
+  async chat(baseUrl, apiKey, modelName, userMessage, systemPrompt, maxTokens, temperature) {
+    const messages = [];
+    if (systemPrompt) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+    messages.push({ role: "user", content: userMessage });
+    const response = await this.chatCompletion({
+      baseUrl,
+      apiKey,
+      modelName,
+      messages,
+      maxTokens,
+      temperature
+    });
+    return response.content;
+  }
+};
+
+// src/ui/ChatPanel.ts
+var ChatPanel = class extends import_obsidian3.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.messages = [];
+    this.plugin = plugin;
+    this.llmService = new LLMService();
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("smart-rag-chat-panel");
+    const header = contentEl.createDiv("smart-rag-chat-header");
+    header.createEl("h2", { text: "Smart RAG Chat" });
+    this.messagesContainer = contentEl.createDiv("smart-rag-messages");
+    const inputArea = contentEl.createDiv("smart-rag-input-area");
+    this.inputEl = inputArea.createEl("textarea", {
+      attr: {
+        placeholder: "Type your message... (Shift+Enter for new line)",
+        rows: "3"
+      }
+    });
+    const buttonContainer = inputArea.createDiv("smart-rag-button-container");
+    const sendButton = buttonContainer.createEl("button", {
+      text: "Send",
+      cls: "mod-cta"
+    });
+    sendButton.onclick = () => this.sendMessage();
+    const clearButton = buttonContainer.createEl("button", {
+      text: "Clear"
+    });
+    clearButton.onclick = () => this.clearMessages();
+    this.inputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        this.sendMessage();
+      }
+    });
+    this.addMessage("assistant", "Hello! I'm Smart RAG. How can I help you today?");
+  }
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+  async sendMessage() {
+    const input = this.inputEl.value.trim();
+    if (!input) return;
+    this.inputEl.value = "";
+    this.addMessage("user", input);
+    this.messages.push({ role: "user", content: input });
+    const loadingEl = this.addMessage("assistant", "Thinking...", true);
+    try {
+      const response = await this.llmService.chat(
+        this.plugin.settings.chatLLM.baseUrl,
+        this.plugin.settings.chatLLM.apiKey,
+        this.plugin.settings.chatLLM.modelName,
+        input,
+        "You are a helpful AI assistant integrated into Obsidian. Be concise and helpful.",
+        this.plugin.settings.chatLLM.maxTokens,
+        this.plugin.settings.chatLLM.temperature
+      );
+      loadingEl.remove();
+      this.addMessage("assistant", response);
+      this.messages.push({ role: "assistant", content: response });
+    } catch (error) {
+      loadingEl.remove();
+      this.addMessage("assistant", `\u274C Error: ${error instanceof Error ? error.message : String(error)}`);
+      new import_obsidian3.Notice("Failed to get response from LLM");
+    }
+  }
+  addMessage(role, content, isLoading = false) {
+    const messageEl = this.messagesContainer.createDiv(`smart-rag-message smart-rag-message-${role}`);
+    const roleEl = messageEl.createDiv("smart-rag-message-role");
+    roleEl.setText(role === "user" ? "\u{1F464} You" : "\u{1F916} Assistant");
+    const contentEl = messageEl.createDiv("smart-rag-message-content");
+    if (isLoading) {
+      contentEl.setText(content);
+      messageEl.addClass("smart-rag-message-loading");
+    } else {
+      if (role === "assistant") {
+        import_obsidian3.MarkdownRenderer.render(
+          this.app,
+          content,
+          contentEl,
+          "",
+          this.plugin
+        );
+      } else {
+        contentEl.setText(content);
+      }
+    }
+    this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+    return messageEl;
+  }
+  clearMessages() {
+    this.messages = [];
+    this.messagesContainer.empty();
+    this.addMessage("assistant", "Chat cleared. How can I help you?");
+  }
+};
+
 // src/main.ts
 var execAsync = (0, import_util.promisify)(import_child_process.exec);
 var connectionTester = new ConnectionTester();
@@ -222,7 +394,7 @@ var DEFAULT_SETTINGS = {
   },
   lightRAGWorkingDir: "~/.openclaw/lightrag-data"
 };
-var SmartRAGPlugin = class extends import_obsidian2.Plugin {
+var SmartRAGPlugin = class extends import_obsidian4.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new SmartRAGSettingTab(this.app, this));
@@ -242,7 +414,7 @@ var SmartRAGPlugin = class extends import_obsidian2.Plugin {
     this.statusCheckInterval = window.setInterval(() => {
       this.updateStatusBar();
     }, 5e3);
-    console.log("Smart RAG plugin loaded - v0.2.0-config");
+    console.log("Smart RAG plugin loaded - v0.3.0-chat");
   }
   onunload() {
     if (this.statusCheckInterval) {
@@ -257,7 +429,8 @@ var SmartRAGPlugin = class extends import_obsidian2.Plugin {
     await this.saveData(this.settings);
   }
   openChatPanel() {
-    console.log("Chat panel opened (placeholder - Phase 1 skeleton)");
+    const chatPanel = new ChatPanel(this.app, this);
+    chatPanel.open();
   }
   async updateStatusBar() {
     const status = await this.checkLightRAGServerStatus();
@@ -361,7 +534,7 @@ var SmartRAGPlugin = class extends import_obsidian2.Plugin {
     }
   }
 };
-var SmartRAGSettingTab = class extends import_obsidian2.PluginSettingTab {
+var SmartRAGSettingTab = class extends import_obsidian4.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.currentTab = "chat-llm";
@@ -378,7 +551,7 @@ var SmartRAGSettingTab = class extends import_obsidian2.PluginSettingTab {
     }
     this.autoSaveTimeout = window.setTimeout(async () => {
       await this.plugin.saveSettings();
-      new import_obsidian2.Notice("\u2713 Auto-saved", 2e3);
+      new import_obsidian4.Notice("\u2713 Auto-saved", 2e3);
       this.autoSaveTimeout = null;
     }, 1e3);
   }
@@ -423,34 +596,34 @@ var SmartRAGSettingTab = class extends import_obsidian2.PluginSettingTab {
         this.renderEmbeddingSettings(containerEl);
         break;
     }
-    new import_obsidian2.Setting(containerEl).addButton((btn) => btn.setButtonText("Save Settings").setCta().onClick(async () => {
+    new import_obsidian4.Setting(containerEl).addButton((btn) => btn.setButtonText("Save Settings").setCta().onClick(async () => {
       await this.plugin.saveSettings();
-      new import_obsidian2.Notice("Settings saved!");
+      new import_obsidian4.Notice("Settings saved!");
     }));
   }
   renderChatLLMSettings(container) {
     container.createEl("h3", { text: "Chat LLM Configuration" });
-    new import_obsidian2.Setting(container).setName("Base URL").setDesc("OpenAI-compatible API endpoint").addText((text) => text.setPlaceholder("https://api.example.com/v1").setValue(this.plugin.settings.chatLLM.baseUrl).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Base URL").setDesc("OpenAI-compatible API endpoint").addText((text) => text.setPlaceholder("https://api.example.com/v1").setValue(this.plugin.settings.chatLLM.baseUrl).onChange(async (value) => {
       this.plugin.settings.chatLLM.baseUrl = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("API Key").setDesc("Authentication key for the API").addText((text) => text.setPlaceholder("sk-xxx").setValue(this.plugin.settings.chatLLM.apiKey).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("API Key").setDesc("Authentication key for the API").addText((text) => text.setPlaceholder("sk-xxx").setValue(this.plugin.settings.chatLLM.apiKey).onChange(async (value) => {
       this.plugin.settings.chatLLM.apiKey = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Model Name").setDesc("Model identifier").addText((text) => text.setPlaceholder("model-name").setValue(this.plugin.settings.chatLLM.modelName).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Model Name").setDesc("Model identifier").addText((text) => text.setPlaceholder("model-name").setValue(this.plugin.settings.chatLLM.modelName).onChange(async (value) => {
       this.plugin.settings.chatLLM.modelName = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Max Tokens").setDesc("Maximum tokens for response").addText((text) => text.setPlaceholder("2048").setValue(String(this.plugin.settings.chatLLM.maxTokens || "")).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Max Tokens").setDesc("Maximum tokens for response").addText((text) => text.setPlaceholder("2048").setValue(String(this.plugin.settings.chatLLM.maxTokens || "")).onChange(async (value) => {
       this.plugin.settings.chatLLM.maxTokens = value ? parseInt(value) : void 0;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Temperature").setDesc("Response randomness (0.0-1.0)").addText((text) => text.setPlaceholder("0.7").setValue(String(this.plugin.settings.chatLLM.temperature || "")).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Temperature").setDesc("Response randomness (0.0-1.0)").addText((text) => text.setPlaceholder("0.7").setValue(String(this.plugin.settings.chatLLM.temperature || "")).onChange(async (value) => {
       this.plugin.settings.chatLLM.temperature = value ? parseFloat(value) : void 0;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Connection Test").setDesc("Test connection to Chat LLM API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
+    new import_obsidian4.Setting(container).setName("Connection Test").setDesc("Test connection to Chat LLM API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
       var _a, _b, _c;
       btn.setButtonText("Testing...");
       btn.setDisabled(true);
@@ -462,30 +635,30 @@ var SmartRAGSettingTab = class extends import_obsidian2.PluginSettingTab {
       btn.setButtonText("Test Connection");
       btn.setDisabled(false);
       if (result.success) {
-        new import_obsidian2.Notice(`\u2705 ${result.message}
+        new import_obsidian4.Notice(`\u2705 ${result.message}
 Model: ${(_a = result.details) == null ? void 0 : _a.model}
 Response time: ${(_b = result.details) == null ? void 0 : _b.responseTime}ms`, 5e3);
       } else {
-        new import_obsidian2.Notice(`\u274C ${result.message}
+        new import_obsidian4.Notice(`\u274C ${result.message}
 Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
       }
     }));
   }
   renderLightRAGLLMSettings(container) {
     container.createEl("h3", { text: "LightRAG LLM Configuration" });
-    new import_obsidian2.Setting(container).setName("Base URL").setDesc("OpenAI-compatible API endpoint for LightRAG internal processing").addText((text) => text.setPlaceholder("https://api.example.com/v1").setValue(this.plugin.settings.lightRAGLLM.baseUrl).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Base URL").setDesc("OpenAI-compatible API endpoint for LightRAG internal processing").addText((text) => text.setPlaceholder("https://api.example.com/v1").setValue(this.plugin.settings.lightRAGLLM.baseUrl).onChange(async (value) => {
       this.plugin.settings.lightRAGLLM.baseUrl = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("API Key").setDesc("Authentication key for the API").addText((text) => text.setPlaceholder("sk-xxx").setValue(this.plugin.settings.lightRAGLLM.apiKey).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("API Key").setDesc("Authentication key for the API").addText((text) => text.setPlaceholder("sk-xxx").setValue(this.plugin.settings.lightRAGLLM.apiKey).onChange(async (value) => {
       this.plugin.settings.lightRAGLLM.apiKey = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Model Name").setDesc("Model identifier").addText((text) => text.setPlaceholder("model-name").setValue(this.plugin.settings.lightRAGLLM.modelName).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Model Name").setDesc("Model identifier").addText((text) => text.setPlaceholder("model-name").setValue(this.plugin.settings.lightRAGLLM.modelName).onChange(async (value) => {
       this.plugin.settings.lightRAGLLM.modelName = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Connection Test").setDesc("Test connection to LightRAG LLM API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
+    new import_obsidian4.Setting(container).setName("Connection Test").setDesc("Test connection to LightRAG LLM API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
       var _a, _b, _c;
       btn.setButtonText("Testing...");
       btn.setDisabled(true);
@@ -497,38 +670,38 @@ Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
       btn.setButtonText("Test Connection");
       btn.setDisabled(false);
       if (result.success) {
-        new import_obsidian2.Notice(`\u2705 ${result.message}
+        new import_obsidian4.Notice(`\u2705 ${result.message}
 Model: ${(_a = result.details) == null ? void 0 : _a.model}
 Response time: ${(_b = result.details) == null ? void 0 : _b.responseTime}ms`, 5e3);
       } else {
-        new import_obsidian2.Notice(`\u274C ${result.message}
+        new import_obsidian4.Notice(`\u274C ${result.message}
 Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
       }
     }));
   }
   renderSemanticChunkSettings(container) {
     container.createEl("h3", { text: "Semantic Chunk LLM Configuration" });
-    new import_obsidian2.Setting(container).setName("Base URL").setDesc("OpenAI-compatible API endpoint for semantic text chunking").addText((text) => text.setPlaceholder("https://api.example.com/v1").setValue(this.plugin.settings.semanticChunkLLM.baseUrl).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Base URL").setDesc("OpenAI-compatible API endpoint for semantic text chunking").addText((text) => text.setPlaceholder("https://api.example.com/v1").setValue(this.plugin.settings.semanticChunkLLM.baseUrl).onChange(async (value) => {
       this.plugin.settings.semanticChunkLLM.baseUrl = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("API Key").setDesc("Authentication key for the API").addText((text) => text.setPlaceholder("sk-xxx").setValue(this.plugin.settings.semanticChunkLLM.apiKey).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("API Key").setDesc("Authentication key for the API").addText((text) => text.setPlaceholder("sk-xxx").setValue(this.plugin.settings.semanticChunkLLM.apiKey).onChange(async (value) => {
       this.plugin.settings.semanticChunkLLM.apiKey = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Model Name").setDesc("Model identifier").addText((text) => text.setPlaceholder("model-name").setValue(this.plugin.settings.semanticChunkLLM.modelName).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Model Name").setDesc("Model identifier").addText((text) => text.setPlaceholder("model-name").setValue(this.plugin.settings.semanticChunkLLM.modelName).onChange(async (value) => {
       this.plugin.settings.semanticChunkLLM.modelName = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Max Tokens").setDesc("Maximum tokens for chunking analysis (1024 recommended)").addText((text) => text.setPlaceholder("1024").setValue(String(this.plugin.settings.semanticChunkLLM.maxTokens || "")).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Max Tokens").setDesc("Maximum tokens for chunking analysis (1024 recommended)").addText((text) => text.setPlaceholder("1024").setValue(String(this.plugin.settings.semanticChunkLLM.maxTokens || "")).onChange(async (value) => {
       this.plugin.settings.semanticChunkLLM.maxTokens = value ? parseInt(value) : void 0;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Temperature").setDesc("Determinism for chunking (0.1-0.3 recommended for stable results)").addText((text) => text.setPlaceholder("0.1").setValue(String(this.plugin.settings.semanticChunkLLM.temperature || "")).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Temperature").setDesc("Determinism for chunking (0.1-0.3 recommended for stable results)").addText((text) => text.setPlaceholder("0.1").setValue(String(this.plugin.settings.semanticChunkLLM.temperature || "")).onChange(async (value) => {
       this.plugin.settings.semanticChunkLLM.temperature = value ? parseFloat(value) : void 0;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Connection Test").setDesc("Test connection to Semantic Chunk LLM API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
+    new import_obsidian4.Setting(container).setName("Connection Test").setDesc("Test connection to Semantic Chunk LLM API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
       var _a, _b, _c;
       btn.setButtonText("Testing...");
       btn.setDisabled(true);
@@ -540,30 +713,30 @@ Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
       btn.setButtonText("Test Connection");
       btn.setDisabled(false);
       if (result.success) {
-        new import_obsidian2.Notice(`\u2705 ${result.message}
+        new import_obsidian4.Notice(`\u2705 ${result.message}
 Model: ${(_a = result.details) == null ? void 0 : _a.model}
 Response time: ${(_b = result.details) == null ? void 0 : _b.responseTime}ms`, 5e3);
       } else {
-        new import_obsidian2.Notice(`\u274C ${result.message}
+        new import_obsidian4.Notice(`\u274C ${result.message}
 Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
       }
     }));
   }
   renderEmbeddingSettings(container) {
     container.createEl("h3", { text: "LightRAG Embedding Configuration" });
-    new import_obsidian2.Setting(container).setName("Base URL").setDesc("Embedding API endpoint (e.g., LM Studio)").addText((text) => text.setPlaceholder("http://127.0.0.1:1234").setValue(this.plugin.settings.lightRAGEmbedding.baseUrl).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Base URL").setDesc("Embedding API endpoint (e.g., LM Studio)").addText((text) => text.setPlaceholder("http://127.0.0.1:1234").setValue(this.plugin.settings.lightRAGEmbedding.baseUrl).onChange(async (value) => {
       this.plugin.settings.lightRAGEmbedding.baseUrl = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Model Name").setDesc("Embedding model identifier").addText((text) => text.setPlaceholder("text-embedding-bge-m3").setValue(this.plugin.settings.lightRAGEmbedding.modelName).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Model Name").setDesc("Embedding model identifier").addText((text) => text.setPlaceholder("text-embedding-bge-m3").setValue(this.plugin.settings.lightRAGEmbedding.modelName).onChange(async (value) => {
       this.plugin.settings.lightRAGEmbedding.modelName = value;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Dimension").setDesc("Vector dimension (e.g., 1024 for BGE-M3)").addText((text) => text.setPlaceholder("1024").setValue(String(this.plugin.settings.lightRAGEmbedding.dimension || "")).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("Dimension").setDesc("Vector dimension (e.g., 1024 for BGE-M3)").addText((text) => text.setPlaceholder("1024").setValue(String(this.plugin.settings.lightRAGEmbedding.dimension || "")).onChange(async (value) => {
       this.plugin.settings.lightRAGEmbedding.dimension = value ? parseInt(value) : void 0;
       this.showAutoSaveBadge();
     }));
-    new import_obsidian2.Setting(container).setName("Connection Test").setDesc("Test connection to Embedding API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
+    new import_obsidian4.Setting(container).setName("Connection Test").setDesc("Test connection to Embedding API").addButton((btn) => btn.setButtonText("Test Connection").onClick(async () => {
       var _a, _b, _c;
       btn.setButtonText("Testing...");
       btn.setDisabled(true);
@@ -574,17 +747,17 @@ Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
       btn.setButtonText("Test Connection");
       btn.setDisabled(false);
       if (result.success) {
-        new import_obsidian2.Notice(`\u2705 ${result.message}
+        new import_obsidian4.Notice(`\u2705 ${result.message}
 ${(_a = result.details) == null ? void 0 : _a.error}
 Response time: ${(_b = result.details) == null ? void 0 : _b.responseTime}ms`, 5e3);
       } else {
-        new import_obsidian2.Notice(`\u274C ${result.message}
+        new import_obsidian4.Notice(`\u274C ${result.message}
 Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
       }
     }));
     container.createEl("hr");
     container.createEl("h4", { text: "\u2699\uFE0F LightRAG Server" });
-    const statusSetting = new import_obsidian2.Setting(container).setName("Server Status").setDesc("LightRAG server status (auto-refresh every 5 seconds)");
+    const statusSetting = new import_obsidian4.Setting(container).setName("Server Status").setDesc("LightRAG server status (auto-refresh every 5 seconds)");
     const statusEl = statusSetting.settingEl.createDiv("smart-rag-server-status");
     statusEl.setText("Checking...");
     const updateStatus = async () => {
@@ -606,24 +779,24 @@ Error: ${(_c = result.details) == null ? void 0 : _c.error}`, 8e3);
     };
     updateStatus();
     const statusInterval = window.setInterval(updateStatus, 5e3);
-    new import_obsidian2.Setting(container).setName("Server Controls").setDesc("Start or stop the LightRAG server").addButton((btn) => btn.setButtonText("Start Server").setCta().onClick(async () => {
+    new import_obsidian4.Setting(container).setName("Server Controls").setDesc("Start or stop the LightRAG server").addButton((btn) => btn.setButtonText("Start Server").setCta().onClick(async () => {
       try {
         await this.plugin.startLightRAGServer();
-        new import_obsidian2.Notice("LightRAG server started!");
+        new import_obsidian4.Notice("LightRAG server started!");
         updateStatus();
       } catch (error) {
-        new import_obsidian2.Notice(`Failed to start server: ${error.message}`);
+        new import_obsidian4.Notice(`Failed to start server: ${error.message}`);
       }
     })).addButton((btn) => btn.setButtonText("Stop Server").setWarning().onClick(async () => {
       try {
         await this.plugin.stopLightRAGServer();
-        new import_obsidian2.Notice("LightRAG server stopped!");
+        new import_obsidian4.Notice("LightRAG server stopped!");
         updateStatus();
       } catch (error) {
-        new import_obsidian2.Notice(`Failed to stop server: ${error.message}`);
+        new import_obsidian4.Notice(`Failed to stop server: ${error.message}`);
       }
     }));
-    new import_obsidian2.Setting(container).setName("LightRAG Working Directory").setDesc("Shared LightRAG data directory (shared with Neural Composer)").addText((text) => text.setPlaceholder("~/.openclaw/lightrag-data").setValue(this.plugin.settings.lightRAGWorkingDir).onChange(async (value) => {
+    new import_obsidian4.Setting(container).setName("LightRAG Working Directory").setDesc("Shared LightRAG data directory (shared with Neural Composer)").addText((text) => text.setPlaceholder("~/.openclaw/lightrag-data").setValue(this.plugin.settings.lightRAGWorkingDir).onChange(async (value) => {
       this.plugin.settings.lightRAGWorkingDir = value;
     }));
   }
