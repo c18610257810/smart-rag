@@ -1,6 +1,9 @@
+import { requestUrl } from 'obsidian';
+
 /**
  * Connection Tester Service
  * Tests LLM and Embedding API connections
+ * Uses Obsidian's requestUrl API to bypass CORS restrictions
  */
 
 export interface TestResult {
@@ -28,7 +31,8 @@ export class ConnectionTester {
 				normalizedUrl += '/v1';
 			}
 
-			const response = await fetch(`${normalizedUrl}/chat/completions`, {
+			const response = await requestUrl({
+				url: `${normalizedUrl}/chat/completions`,
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -36,26 +40,25 @@ export class ConnectionTester {
 				},
 				body: JSON.stringify({
 					model: modelName,
-				 messages: [{ role: 'user', content: 'Say "OK" if you can hear me.' }],
+					messages: [{ role: 'user', content: 'Say "OK" if you can hear me.' }],
 					max_tokens: 10
 				})
 			});
 
 			const responseTime = Date.now() - startTime;
 
-			if (!response.ok) {
-				const errorText = await response.text();
+			if (response.status !== 200) {
 				return {
 					success: false,
 					message: `API returned ${response.status}`,
 					details: {
-						error: errorText,
+						error: response.text || 'Unknown error',
 						responseTime
 					}
 				};
 			}
 
-			const data = await response.json();
+			const data = response.json;
 			return {
 				success: true,
 				message: 'Connection successful!',
@@ -91,7 +94,8 @@ export class ConnectionTester {
 				normalizedUrl += '/v1';
 			}
 
-			const response = await fetch(`${normalizedUrl}/embeddings`, {
+			const response = await requestUrl({
+				url: `${normalizedUrl}/embeddings`,
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json'
@@ -104,19 +108,18 @@ export class ConnectionTester {
 
 			const responseTime = Date.now() - startTime;
 
-			if (!response.ok) {
-				const errorText = await response.text();
+			if (response.status !== 200) {
 				return {
 					success: false,
 					message: `API returned ${response.status}`,
 					details: {
-						error: errorText,
+						error: response.text || 'Unknown error',
 						responseTime
 					}
 				};
 			}
 
-			const data = await response.json();
+			const data = response.json;
 			const embeddingDim = data.data?.[0]?.embedding?.length || 0;
 			
 			return {
@@ -148,13 +151,14 @@ export class ConnectionTester {
 		const startTime = Date.now();
 		
 		try {
-			const response = await fetch('http://127.0.0.1:9621/health', {
+			const response = await requestUrl({
+				url: 'http://127.0.0.1:9621/health',
 				method: 'GET'
 			});
 
 			const responseTime = Date.now() - startTime;
 
-			if (!response.ok) {
+			if (response.status !== 200) {
 				return {
 					success: false,
 					message: `LightRAG server returned ${response.status}`,
@@ -164,7 +168,7 @@ export class ConnectionTester {
 				};
 			}
 
-			const data = await response.json();
+			const data = response.json;
 			return {
 				success: true,
 				message: 'LightRAG server is healthy',
