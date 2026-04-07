@@ -340,21 +340,38 @@ class SmartRAGSettingTab extends PluginSettingTab {
 		// Server status
 		const statusSetting = new Setting(container)
 			.setName('Server Status')
-			.setDesc('Check if LightRAG server is running on port 9621');
+			.setDesc('LightRAG server status (auto-refresh every 5 seconds)');
 
 		const statusEl = statusSetting.settingEl.createDiv('smart-rag-server-status');
 		statusEl.setText('Checking...');
 		
-		// Check server status
-		this.checkLightRAGServerStatus().then(status => {
-			if (status.running) {
-				statusEl.setText('● Running');
-				statusEl.style.color = 'green';
-			} else {
-				statusEl.setText('○ Stopped');
-				statusEl.style.color = 'red';
+		// 更新状态显示的函数
+		const updateStatus = async () => {
+			const status = await this.checkLightRAGServerStatus();
+			switch (status.status) {
+				case 'running':
+					statusEl.setText('● Running');
+					statusEl.style.color = '#4CAF50';
+					break;
+				case 'busy':
+					statusEl.setText('● Busy (Processing)');
+					statusEl.style.color = '#FFC107';
+					break;
+				case 'stopped':
+					statusEl.setText('○ Stopped');
+					statusEl.style.color = '#F44336';
+					break;
 			}
-		});
+		};
+
+		// 初始检查
+		updateStatus();
+		
+		// 定时刷新（每5秒）
+		const statusInterval = setInterval(updateStatus, 5000);
+		
+		// 页面关闭时清理定时器
+		this.register(() => clearInterval(statusInterval));
 
 		// Start/Stop buttons
 		const buttonContainer = container.createDiv('smart-rag-server-buttons');
@@ -367,7 +384,8 @@ class SmartRAGSettingTab extends PluginSettingTab {
 			try {
 				await this.startLightRAGServer();
 				new Notice('LightRAG server started!');
-				this.display(); // Refresh status
+				// 立即刷新状态
+				updateStatus();
 			} catch (error) {
 				new Notice(`Failed to start server: ${error.message}`);
 			}
@@ -381,7 +399,8 @@ class SmartRAGSettingTab extends PluginSettingTab {
 			try {
 				await this.stopLightRAGServer();
 				new Notice('LightRAG server stopped!');
-				this.display(); // Refresh status
+				// 立即刷新状态
+				updateStatus();
 			} catch (error) {
 				new Notice(`Failed to stop server: ${error.message}`);
 			}
@@ -399,12 +418,33 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				}));
 	}
 
-	async checkLightRAGServerStatus(): Promise<{running: boolean}> {
+	async checkLightRAGServerStatus(): Promise<{status: 'running' | 'busy' | 'stopped'}> {
 		try {
-			const response = await fetch('http://127.0.0.1:9621/health');
-			return { running: response.ok };
+			// 先检查进程是否存在
+			const { stdout } = await execAsync('ps aux | grep -v grep | grep lightrag-server');
+			if (!stdout.trim()) {
+				return { status: 'stopped' };
+			}
+
+			// 进程存在，检查健康状态
+			try {
+				const response = await fetch('http://127.0.0.1:9621/health');
+				if (response.ok) {
+					const data = await response.json();
+					// 如果 health API 返回 busy 状态
+					if (data.status === 'busy' || data.processing) {
+						return { status: 'busy' };
+					}
+					return { status: 'running' };
+				}
+				return { status: 'stopped' };
+			} catch (fetchError) {
+				// 进程存在但无法访问 API，可能正在启动中
+				return { status: 'busy' };
+			}
 		} catch (error) {
-			return { running: false };
+			// 进程不存在
+			return { status: 'stopped' };
 		}
 	}
 

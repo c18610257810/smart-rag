@@ -193,18 +193,29 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
     }));
     container.createEl("hr");
     container.createEl("h4", { text: "\u2699\uFE0F LightRAG Server" });
-    const statusSetting = new import_obsidian.Setting(container).setName("Server Status").setDesc("Check if LightRAG server is running on port 9621");
+    const statusSetting = new import_obsidian.Setting(container).setName("Server Status").setDesc("LightRAG server status (auto-refresh every 5 seconds)");
     const statusEl = statusSetting.settingEl.createDiv("smart-rag-server-status");
     statusEl.setText("Checking...");
-    this.checkLightRAGServerStatus().then((status) => {
-      if (status.running) {
-        statusEl.setText("\u25CF Running");
-        statusEl.style.color = "green";
-      } else {
-        statusEl.setText("\u25CB Stopped");
-        statusEl.style.color = "red";
+    const updateStatus = async () => {
+      const status = await this.checkLightRAGServerStatus();
+      switch (status.status) {
+        case "running":
+          statusEl.setText("\u25CF Running");
+          statusEl.style.color = "#4CAF50";
+          break;
+        case "busy":
+          statusEl.setText("\u25CF Busy (Processing)");
+          statusEl.style.color = "#FFC107";
+          break;
+        case "stopped":
+          statusEl.setText("\u25CB Stopped");
+          statusEl.style.color = "#F44336";
+          break;
       }
-    });
+    };
+    updateStatus();
+    const statusInterval = setInterval(updateStatus, 5e3);
+    this.register(() => clearInterval(statusInterval));
     const buttonContainer = container.createDiv("smart-rag-server-buttons");
     const startButton = buttonContainer.createEl("button", {
       text: "Start Server",
@@ -214,7 +225,7 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
       try {
         await this.startLightRAGServer();
         new import_obsidian.Notice("LightRAG server started!");
-        this.display();
+        updateStatus();
       } catch (error) {
         new import_obsidian.Notice(`Failed to start server: ${error.message}`);
       }
@@ -227,7 +238,7 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
       try {
         await this.stopLightRAGServer();
         new import_obsidian.Notice("LightRAG server stopped!");
-        this.display();
+        updateStatus();
       } catch (error) {
         new import_obsidian.Notice(`Failed to stop server: ${error.message}`);
       }
@@ -238,10 +249,25 @@ var SmartRAGSettingTab = class extends import_obsidian.PluginSettingTab {
   }
   async checkLightRAGServerStatus() {
     try {
-      const response = await fetch("http://127.0.0.1:9621/health");
-      return { running: response.ok };
+      const { stdout } = await execAsync("ps aux | grep -v grep | grep lightrag-server");
+      if (!stdout.trim()) {
+        return { status: "stopped" };
+      }
+      try {
+        const response = await fetch("http://127.0.0.1:9621/health");
+        if (response.ok) {
+          const data = await response.json();
+          if (data.status === "busy" || data.processing) {
+            return { status: "busy" };
+          }
+          return { status: "running" };
+        }
+        return { status: "stopped" };
+      } catch (fetchError) {
+        return { status: "busy" };
+      }
     } catch (error) {
-      return { running: false };
+      return { status: "stopped" };
     }
   }
   async startLightRAGServer() {
