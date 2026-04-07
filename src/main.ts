@@ -208,7 +208,8 @@ n		// 从用户设置生成配置
 		};
 
 		// 写入配置文件
-		const fs = require('fs');
+		// @ts-ignore
+		const fs = window.require('fs');
 		fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 		console.log('LightRAG config written:', configPath);
 		console.log('Config:', JSON.stringify(config, null, 2));

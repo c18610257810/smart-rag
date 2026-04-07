@@ -169,7 +169,7 @@ var SmartRAGPlugin = class extends import_obsidian.Plugin {
         dimension: this.settings.lightRAGEmbedding.dimension || 1024
       }
     };
-    const fs = require("fs");
+    const fs = window.require("fs");
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
     console.log("LightRAG config written:", configPath);
     console.log("Config:", JSON.stringify(config, null, 2));
