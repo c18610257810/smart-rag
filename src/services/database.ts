@@ -1,6 +1,7 @@
 import { drizzle } from 'drizzle-orm/pglite';
 import { pgTable, text, timestamp, jsonb } from 'drizzle-orm/pg-core';
 import { PGlite } from '@electric-sql/pglite';
+import { requestUrl } from 'obsidian';
 
 /**
  * Database Schema
@@ -30,11 +31,49 @@ export const chunks = pgTable('chunks', {
 /**
  * Database Service
  * Manages PGlite connection and operations
+ * 
+ * Uses the same approach as Neural Composer:
+ * - Load PGlite resources from CDN
+ * - Use PGlite.create() with fsBundle, wasmModule, and vector extension
  */
 export class DatabaseService {
 	private db: ReturnType<typeof drizzle> | null = null;
 	private pglite: PGlite | null = null;
 	private initialized = false;
+
+	/**
+	 * Load PGlite resources from CDN
+	 * Same approach as Neural Composer
+	 */
+	private async loadPGliteResources(): Promise<{
+		fsBundle: Blob;
+		wasmModule: WebAssembly.Module;
+		vectorExtensionBundlePath: string;
+	}> {
+		try {
+			const PGLITE_VERSION = '0.2.12';
+			const [fsBundleResponse, wasmResponse] = await Promise.all([
+				requestUrl(
+					`https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/postgres.data`,
+				),
+				requestUrl(
+					`https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/postgres.wasm`,
+				),
+			]);
+
+			const fsBundle = new Blob([fsBundleResponse.arrayBuffer], {
+				type: 'application/octet-stream',
+			});
+			const wasmModule = await WebAssembly.compile(wasmResponse.arrayBuffer);
+			// Use string instead of URL object - PGlite accepts both
+			const vectorExtensionBundlePath = `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/vector.tar.gz`;
+
+			return { fsBundle, wasmModule, vectorExtensionBundlePath };
+		} catch (error) {
+			console.error('Error loading PGlite resources:', error);
+			throw error;
+		}
+	}
 
 	async initialize(dbName?: string): Promise<void> {
 		if (this.initialized) {
@@ -42,11 +81,16 @@ export class DatabaseService {
 		}
 
 		try {
-			// Initialize PGlite with IndexedDB persistence
-			// Use idb:// prefix for persistent storage in browser
-			const dbUrl = dbName ? `idb://${dbName}` : 'idb://smart-rag-db';
-			this.pglite = new PGlite(dbUrl);
-			
+			// Load PGlite resources from CDN (same as Neural Composer)
+			const { fsBundle, wasmModule } = await this.loadPGliteResources();
+
+			// Create PGlite instance WITHOUT vector extension (to avoid URL issues)
+			// We'll store embeddings as JSONB instead of vector type
+			this.pglite = await PGlite.create({
+				fsBundle: fsBundle,
+				wasmModule: wasmModule,
+			});
+
 			// Create Drizzle ORM instance
 			this.db = drizzle(this.pglite);
 
@@ -54,7 +98,7 @@ export class DatabaseService {
 			await this.createTables();
 
 			this.initialized = true;
-			console.log('Database initialized successfully');
+			console.log('Database initialized successfully (without vector extension)');
 		} catch (error) {
 			console.error('Failed to initialize database:', error);
 			throw error;

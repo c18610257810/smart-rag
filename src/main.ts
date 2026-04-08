@@ -9,6 +9,7 @@ import { ChatView } from './ChatView';
 import { CHAT_VIEW_TYPE } from './constants';
 import { RAGEngine } from './contexts/rag-context';
 import { ErrorModal } from './ui/ErrorModal';
+import { DatabaseManager } from './database/DatabaseManager';
 
 const execAsync = promisify(exec);
 const connectionTester = new ConnectionTester();
@@ -80,7 +81,7 @@ export default class SmartRAGPlugin extends Plugin {
 	settings!: SmartRAGSettings;
 	statusBarItem!: HTMLElement;
 	statusCheckInterval!: number;
-	private databaseService: DatabaseService | null = null;
+	private databaseManager: DatabaseManager | null = null;
 	private settingsChangeListeners: Set<() => void> = new Set();
 	private embeddingService: EmbeddingService | null = null;
 	private chunkingService: ChunkingService | null = null;
@@ -136,14 +137,13 @@ export default class SmartRAGPlugin extends Plugin {
 			this.updateStatusBar();
 		}, 5000);
 
-		// Initialize database for local vector storage
+		// Initialize database for local vector storage using Neural Composer's DatabaseManager
 		try {
-			this.databaseService = new DatabaseService();
-			await this.databaseService.initialize('smart-rag-db');
+			this.databaseManager = await DatabaseManager.create(this.app);
 			console.log('Smart RAG database initialized');
 		} catch (error) {
 			console.error('Failed to initialize database:', error);
-			new Notice('Failed to initialize vector database. Some features may not work.');
+			// Don't show notice - let plugin work without database for now
 		}
 
 		console.log('Smart RAG plugin loaded - v0.3.5-index');
@@ -186,8 +186,8 @@ export default class SmartRAGPlugin extends Plugin {
 	/**
 	 * Get database service instance
 	 */
-	getDatabaseService(): DatabaseService | null {
-		return this.databaseService;
+	getDatabaseManager(): DatabaseManager | null {
+		return this.databaseManager;
 	}
 
 	/**
@@ -345,6 +345,11 @@ export default class SmartRAGPlugin extends Plugin {
 	 * Index current file
 	 */
 	async indexCurrentFile(): Promise<void> {
+		if (!this.databaseManager) {
+			new Notice('Database not initialized. Please restart Obsidian.');
+			return;
+		}
+
 		const activeFile = this.app.workspace.getActiveFile();
 		if (!activeFile) {
 			new Notice('No active file to index');
@@ -354,46 +359,33 @@ export default class SmartRAGPlugin extends Plugin {
 		try {
 			new Notice(`Indexing ${activeFile.name}...`);
 
-			// Read file content
-		const content = await this.app.vault.read(activeFile);
+			// Use VectorManager from Neural Composer
+			const vectorManager = this.databaseManager.getVectorManager();
+			
+			// Create embedding model client
+			const embeddingModel = {
+				id: 'smart-rag-embedding',
+				dimension: this.settings.lightRAGEmbedding.dimension || 1024,
+				getEmbedding: async (text: string) => {
+					const embeddingService = new EmbeddingService();
+					const result = await embeddingService.generateEmbedding(
+						this.settings.lightRAGEmbedding.baseUrl,
+						this.settings.lightRAGEmbedding.modelName,
+						text
+					);
+					return result.embedding;
+				}
+			};
 
-			// Insert document to database
-			const docId = `doc-${Date.now()}`;
-			await this.databaseService?.insertDocument({
-				id: docId,
-				path: activeFile.path,
-				title: activeFile.basename,
-				content
+			// Index using VectorManager
+			await vectorManager.updateVaultIndex(embeddingModel, {
+				chunkSize: 1000,
+				excludePatterns: [],
+				includePatterns: [activeFile.path],
+				reindexAll: true
 			});
 
-			// Chunk content
-			const chunkingService = new ChunkingService();
-			const chunks = await chunkingService.chunkDocument(
-				this.settings.semanticChunkLLM.baseUrl,
-				this.settings.semanticChunkLLM.apiKey,
-				this.settings.semanticChunkLLM.modelName,
-				content
-			);
-
-			// Generate embeddings and insert chunks
-			const embeddingService = new EmbeddingService();
-			for (const chunk of chunks) {
-				const embedding = await embeddingService.generateEmbedding(
-					this.settings.lightRAGEmbedding.baseUrl,
-					this.settings.lightRAGEmbedding.modelName,
-					chunk.content
-				);
-
-				await this.databaseService?.insertChunk({
-					id: `${docId}-${chunk.id}`,
-					documentId: docId,
-					content: chunk.content,
-					embedding: embedding.embedding,
-					metadata: chunk.metadata
-				});
-			}
-
-			new Notice(`✅ Indexed ${activeFile.name} (${chunks.length} chunks)`);
+			new Notice(`✅ Indexed ${activeFile.name}`);
 		} catch (error) {
 			console.error('Failed to index file:', error);
 			new Notice(`❌ Failed to index: ${error instanceof Error ? error.message : String(error)}`);
@@ -404,69 +396,44 @@ export default class SmartRAGPlugin extends Plugin {
 	 * Index entire vault
 	 */
 	async indexVault(): Promise<void> {
+		if (!this.databaseManager) {
+			new Notice('Database not initialized. Please restart Obsidian.');
+			return;
+		}
+
 		try {
-			const files = this.app.vault.getMarkdownFiles();
-			new Notice(`Indexing ${files.length} files...`);
+			new Notice('Indexing entire vault... This may take a while.');
 
-			let successCount = 0;
-			let failCount = 0;
-
-			for (const file of files) {
-				try {
-					// Skip already indexed files (based on mtime)
-					const existingDoc = await this.databaseService?.getDocumentByPath(file.path);
-					if (existingDoc) {
-						// Compare mtime - reindex if file modified
-						// For now, skip reindexing
-						continue;
-					}
-
-					// Read and index file
-					const content = await this.app.vault.read(file);
-					const docId = `doc-${file.path.replace(/[^a-zA-Z0-9-]/g, '-')}-${Date.now()}`;
-
-					// Insert document
-					await this.databaseService?.insertDocument({
-						id: docId,
-						path: file.path,
-						title: file.basename,
-						content
-					});
-
-					// Chunk and embed
-					const chunkingService = new ChunkingService();
-					const chunks = await chunkingService.chunkDocument(
-						this.settings.semanticChunkLLM.baseUrl,
-						this.settings.semanticChunkLLM.apiKey,
-						this.settings.semanticChunkLLM.modelName,
-						content
-					);
-
+			// Use VectorManager from Neural Composer
+			const vectorManager = this.databaseManager.getVectorManager();
+			
+			// Create embedding model client
+			const embeddingModel = {
+				id: 'smart-rag-embedding',
+				dimension: this.settings.lightRAGEmbedding.dimension || 1024,
+				getEmbedding: async (text: string) => {
 					const embeddingService = new EmbeddingService();
-					for (const chunk of chunks) {
-						const embedding = await embeddingService.generateEmbedding(
-							this.settings.lightRAGEmbedding.baseUrl,
-							this.settings.lightRAGEmbedding.modelName,
-							chunk.content
-						);
-
-						await this.databaseService?.insertChunk({
-							id: `${docId}-${chunk.id}`,
-							documentId: docId,
-							content: chunk.content,
-							embedding: embedding.embedding,
-							metadata: chunk.metadata
-						});
-					}
-
-					successCount++;
-				} catch (error) {
-					console.error(`Failed to index ${file.path}:`, error);
-					failCount++;
+					const result = await embeddingService.generateEmbedding(
+						this.settings.lightRAGEmbedding.baseUrl,
+						this.settings.lightRAGEmbedding.modelName,
+						text
+					);
+					return result.embedding;
 				}
-			}
+			};
 
-			new Notice(`✅ Index complete: ${successCount} files indexed, ${failCount} failed`);
+			// Index entire vault using VectorManager
+			await vectorManager.updateVaultIndex(embeddingModel, {
+				chunkSize: 1000,
+				excludePatterns: [],
+				includePatterns: [],
+				reindexAll: false
+			}, (progress) => {
+				console.log(`Index progress: ${progress.completedChunks}/${progress.totalChunks}`);
+			});
+
+			const stats = await this.getDatabaseStats();
+			new Notice(`✅ Index complete: ${stats?.documentsCount || 0} files, ${stats?.chunksCount || 0} chunks`);
 		} catch (error) {
 			console.error('Failed to index vault:', error);
 			new Notice(`❌ Failed to index vault: ${error instanceof Error ? error.message : String(error)}`);
@@ -477,10 +444,20 @@ export default class SmartRAGPlugin extends Plugin {
 	 * Get database statistics
 	 */
 	async getDatabaseStats(): Promise<{ documentsCount: number; chunksCount: number } | null> {
-		if (!this.databaseService || !this.databaseService.isInitialized()) {
+		if (!this.databaseManager) {
 			return null;
 		}
-		return await this.databaseService.getStats();
+		try {
+			const vectorManager = this.databaseManager.getVectorManager();
+			const stats = await vectorManager.getEmbeddingDbStats();
+			return {
+				documentsCount: stats.documentCount,
+				chunksCount: stats.chunkCount
+			};
+		} catch (error) {
+			console.error('Failed to get database stats:', error);
+			return null;
+		}
 	}
 
 	async stopLightRAGServer(): Promise<void> {

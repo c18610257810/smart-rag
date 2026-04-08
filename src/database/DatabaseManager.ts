@@ -112,7 +112,6 @@ export class DatabaseManager {
       const db = drizzle(this.pgClient)
       return db
     } catch (error) {
-
       if (
         error instanceof Error &&
         error.message.includes(
@@ -148,7 +147,6 @@ export class DatabaseManager {
       })
       return drizzle(this.pgClient)
     } catch (error) {
-
       if (
         error instanceof Error &&
         error.message.includes(
@@ -210,7 +208,7 @@ export class DatabaseManager {
     vectorExtensionBundlePath: URL
   }> {
     try {
-      const PGLITE_VERSION = '0.2.12'
+      const PGLITE_VERSION = '0.4.3'
       const [fsBundleResponse, wasmResponse] = await Promise.all([
         requestUrl(
           `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/postgres.data`,

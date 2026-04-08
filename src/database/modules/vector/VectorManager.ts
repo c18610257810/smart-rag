@@ -1,6 +1,6 @@
 import { PgliteDatabase } from 'drizzle-orm/pglite'
 import { backOff } from 'exponential-backoff'
-import { RecursiveCharacterTextSplitter } from 'langchain/text_splitter'
+import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters'
 import { minimatch } from 'minimatch'
 import { App, TFile } from 'obsidian'
 
