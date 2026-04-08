@@ -208,7 +208,7 @@ export class DatabaseManager {
     vectorExtensionBundlePath: URL
   }> {
     try {
-      const PGLITE_VERSION = '0.4.3'
+      const PGLITE_VERSION = '0.2.12'
       const [fsBundleResponse, wasmResponse] = await Promise.all([
         requestUrl(
           `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/postgres.data`,
