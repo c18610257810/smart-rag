@@ -2728,3 +2728,7 @@ button.smart-rag-chat-input-model-select {
 .smart-rag-merge-warning p:last-child {
     margin-bottom: 0;
 }
+.smart-rag-db-stats {
+  font-weight: var(--font-semibold);
+  color: var(--text-accent);
+}

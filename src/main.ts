@@ -108,6 +108,24 @@ export default class SmartRAGPlugin extends Plugin {
 			}
 		});
 
+		// Register command: Index current file
+		this.addCommand({
+			id: 'index-current-file',
+			name: 'Index Current File',
+			callback: async () => {
+				await this.indexCurrentFile();
+			}
+		});
+
+		// Register command: Index entire vault
+		this.addCommand({
+			id: 'index-vault',
+			name: 'Index Entire Vault',
+			callback: async () => {
+				await this.indexVault();
+			}
+		});
+
 		// Add status bar item for LightRAG Server status
 		this.statusBarItem = this.addStatusBarItem();
 		this.statusBarItem.setText('RAG: Checking...');
@@ -118,7 +136,17 @@ export default class SmartRAGPlugin extends Plugin {
 			this.updateStatusBar();
 		}, 5000);
 
-		console.log('Smart RAG plugin loaded - v0.3.0-chat');
+		// Initialize database for local vector storage
+		try {
+			this.databaseService = new DatabaseService();
+			await this.databaseService.initialize('smart-rag-db');
+			console.log('Smart RAG database initialized');
+		} catch (error) {
+			console.error('Failed to initialize database:', error);
+			new Notice('Failed to initialize vector database. Some features may not work.');
+		}
+
+		console.log('Smart RAG plugin loaded - v0.3.5-index');
 	}
 
 	onunload() {
@@ -311,6 +339,148 @@ export default class SmartRAGPlugin extends Plugin {
 			console.error('Failed to start LightRAG Server:', error);
 			throw error;
 		}
+	}
+
+	/**
+	 * Index current file
+	 */
+	async indexCurrentFile(): Promise<void> {
+		const activeFile = this.app.workspace.getActiveFile();
+		if (!activeFile) {
+			new Notice('No active file to index');
+			return;
+		}
+
+		try {
+			new Notice(`Indexing ${activeFile.name}...`);
+
+			// Read file content
+		const content = await this.app.vault.read(activeFile);
+
+			// Insert document to database
+			const docId = `doc-${Date.now()}`;
+			await this.databaseService?.insertDocument({
+				id: docId,
+				path: activeFile.path,
+				title: activeFile.basename,
+				content
+			});
+
+			// Chunk content
+			const chunkingService = new ChunkingService();
+			const chunks = await chunkingService.chunkDocument(
+				this.settings.semanticChunkLLM.baseUrl,
+				this.settings.semanticChunkLLM.apiKey,
+				this.settings.semanticChunkLLM.modelName,
+				content
+			);
+
+			// Generate embeddings and insert chunks
+			const embeddingService = new EmbeddingService();
+			for (const chunk of chunks) {
+				const embedding = await embeddingService.generateEmbedding(
+					this.settings.lightRAGEmbedding.baseUrl,
+					this.settings.lightRAGEmbedding.modelName,
+					chunk.content
+				);
+
+				await this.databaseService?.insertChunk({
+					id: `${docId}-${chunk.id}`,
+					documentId: docId,
+					content: chunk.content,
+					embedding: embedding.embedding,
+					metadata: chunk.metadata
+				});
+			}
+
+			new Notice(`✅ Indexed ${activeFile.name} (${chunks.length} chunks)`);
+		} catch (error) {
+			console.error('Failed to index file:', error);
+			new Notice(`❌ Failed to index: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * Index entire vault
+	 */
+	async indexVault(): Promise<void> {
+		try {
+			const files = this.app.vault.getMarkdownFiles();
+			new Notice(`Indexing ${files.length} files...`);
+
+			let successCount = 0;
+			let failCount = 0;
+
+			for (const file of files) {
+				try {
+					// Skip already indexed files (based on mtime)
+					const existingDoc = await this.databaseService?.getDocumentByPath(file.path);
+					if (existingDoc) {
+						// Compare mtime - reindex if file modified
+						// For now, skip reindexing
+						continue;
+					}
+
+					// Read and index file
+					const content = await this.app.vault.read(file);
+					const docId = `doc-${file.path.replace(/[^a-zA-Z0-9-]/g, '-')}-${Date.now()}`;
+
+					// Insert document
+					await this.databaseService?.insertDocument({
+						id: docId,
+						path: file.path,
+						title: file.basename,
+						content
+					});
+
+					// Chunk and embed
+					const chunkingService = new ChunkingService();
+					const chunks = await chunkingService.chunkDocument(
+						this.settings.semanticChunkLLM.baseUrl,
+						this.settings.semanticChunkLLM.apiKey,
+						this.settings.semanticChunkLLM.modelName,
+						content
+					);
+
+					const embeddingService = new EmbeddingService();
+					for (const chunk of chunks) {
+						const embedding = await embeddingService.generateEmbedding(
+							this.settings.lightRAGEmbedding.baseUrl,
+							this.settings.lightRAGEmbedding.modelName,
+							chunk.content
+						);
+
+						await this.databaseService?.insertChunk({
+							id: `${docId}-${chunk.id}`,
+							documentId: docId,
+							content: chunk.content,
+							embedding: embedding.embedding,
+							metadata: chunk.metadata
+						});
+					}
+
+					successCount++;
+				} catch (error) {
+					console.error(`Failed to index ${file.path}:`, error);
+					failCount++;
+				}
+			}
+
+			new Notice(`✅ Index complete: ${successCount} files indexed, ${failCount} failed`);
+		} catch (error) {
+			console.error('Failed to index vault:', error);
+			new Notice(`❌ Failed to index vault: ${error instanceof Error ? error.message : String(error)}`);
+		}
+	}
+
+	/**
+	 * Get database statistics
+	 */
+	async getDatabaseStats(): Promise<{ documentsCount: number; chunksCount: number } | null> {
+		if (!this.databaseService || !this.databaseService.isInitialized()) {
+			return null;
+		}
+		return await this.databaseService.getStats();
 	}
 
 	async stopLightRAGServer(): Promise<void> {
@@ -795,6 +965,70 @@ class SmartRAGSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.lightRAGWorkingDir)
 				.onChange(async (value) => {
 					this.plugin.settings.lightRAGWorkingDir = value;
+				}));
+
+		// Local Vector Indexing Section
+		container.createEl('hr');
+		container.createEl('h4', {text: '📊 Local Vector Indexing'});
+
+		// Database Statistics
+		const statsSetting = new Setting(container)
+			.setName('Database Statistics')
+			.setDesc('Number of indexed documents and chunks');
+
+		const statsEl = statsSetting.settingEl.createDiv('smart-rag-db-stats');
+		statsEl.setText('Loading...');
+
+		// Update statistics
+		const updateStats = async () => {
+			const stats = await this.plugin.getDatabaseStats();
+			if (stats) {
+				statsEl.setText(`${stats.documentsCount} documents / ${stats.chunksCount} chunks`);
+			} else {
+				statsEl.setText('Database not initialized');
+			}
+		};
+		updateStats();
+
+		// Index Current File button
+		new Setting(container)
+			.setName('Index Current File')
+			.setDesc('Index the currently open file (uses remote Embedding API)')
+			.addButton(btn => btn
+				.setButtonText('Index Current File')
+				.setCta()
+				.onClick(async () => {
+					await this.plugin.indexCurrentFile();
+					updateStats();
+				}));
+
+		// Index Entire Vault button
+		new Setting(container)
+			.setName('Index Entire Vault')
+			.setDesc('Index all Markdown files in the vault (may take a long time)')
+			.addButton(btn => btn
+				.setButtonText('Index Entire Vault')
+				.setWarning()
+				.onClick(async () => {
+					if (confirm('Indexing all files may take a long time. Continue?')) {
+						await this.plugin.indexVault();
+						updateStats();
+					}
+				}));
+
+		// Clear Database button
+		new Setting(container)
+			.setName('Clear Local Database')
+			.setDesc('Delete all indexed documents and chunks')
+			.addButton(btn => btn
+				.setButtonText('Clear Database')
+				.setDanger()
+				.onClick(async () => {
+					if (confirm('Are you sure you want to clear the database? This cannot be undone.')) {
+						await this.plugin.getDatabaseService()?.clearDatabase();
+						new Notice('Database cleared');
+						updateStats();
+					}
 				}));
 	}
 }
