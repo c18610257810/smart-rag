@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite'
+import { vector } from '@electric-sql/pglite/vector'
 import { PgliteDatabase, drizzle } from 'drizzle-orm/pglite'
 import { App, normalizePath, requestUrl } from 'obsidian'
 
@@ -100,15 +101,19 @@ export class DatabaseManager {
 
   private async createNewDatabase() {
     try {
-      const { fsBundle, wasmModule, vectorExtensionBundlePath } =
+      const { fsBundle, pgliteWasmModule, initdbWasmModule, vectorExtension } =
         await this.loadPGliteResources()
-      this.pgClient = await PGlite.create({
+      // PGlite 0.4.3 uses new PGlite() instead of PGlite.create()
+      this.pgClient = new PGlite('memory://', {
         fsBundle: fsBundle,
-        wasmModule: wasmModule,
+        pgliteWasmModule: pgliteWasmModule,
+        initdbWasmModule: initdbWasmModule,
         extensions: {
-          vector: vectorExtensionBundlePath,
+          vector: vectorExtension,
         },
       })
+      // Wait for PGlite to be ready
+      await this.pgClient.waitReady
       const db = drizzle(this.pgClient)
       return db
     } catch (error) {
@@ -135,16 +140,19 @@ export class DatabaseManager {
       }
       const fileBuffer = await this.app.vault.adapter.readBinary(this.dbPath)
       const fileBlob = new Blob([fileBuffer], { type: 'application/x-gzip' })
-      const { fsBundle, wasmModule, vectorExtensionBundlePath } =
+      const { fsBundle, pgliteWasmModule, initdbWasmModule, vectorExtension } =
         await this.loadPGliteResources()
-      this.pgClient = await PGlite.create({
+      // PGlite 0.4.3 uses new PGlite() with loadDataDir option
+      this.pgClient = new PGlite('memory://', {
         loadDataDir: fileBlob,
         fsBundle: fsBundle,
-        wasmModule: wasmModule,
+        pgliteWasmModule: pgliteWasmModule,
+        initdbWasmModule: initdbWasmModule,
         extensions: {
-          vector: vectorExtensionBundlePath,
+          vector: vectorExtension,
         },
       })
+      await this.pgClient.waitReady
       return drizzle(this.pgClient)
     } catch (error) {
       if (
@@ -204,29 +212,32 @@ export class DatabaseManager {
   // TODO: This function is a temporary workaround chosen due to the difficulty of bundling postgres.wasm and postgres.data from node_modules into a single JS file. The ultimate goal is to bundle everything into one JS file in the future.
   private async loadPGliteResources(): Promise<{
     fsBundle: Blob
-    wasmModule: WebAssembly.Module
-    vectorExtensionBundlePath: URL
+    pgliteWasmModule: WebAssembly.Module
+    initdbWasmModule: WebAssembly.Module
+    vectorExtension: typeof vector
   }> {
     try {
       const PGLITE_VERSION = '0.4.3'
-      const [fsBundleResponse, wasmResponse] = await Promise.all([
+      const [fsBundleResponse, pgliteWasmResponse, initdbWasmResponse] = await Promise.all([
         requestUrl(
           `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/pglite.data`,
         ),
         requestUrl(
           `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/pglite.wasm`,
         ),
+        requestUrl(
+          `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/initdb.wasm`,
+        ),
       ])
 
       const fsBundle = new Blob([fsBundleResponse.arrayBuffer], {
         type: 'application/octet-stream',
       })
-      const wasmModule = await WebAssembly.compile(wasmResponse.arrayBuffer)
-      const vectorExtensionBundlePath = new URL(
-        `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/vector.tar.gz`,
-      )
+      const pgliteWasmModule = await WebAssembly.compile(pgliteWasmResponse.arrayBuffer)
+      const initdbWasmModule = await WebAssembly.compile(initdbWasmResponse.arrayBuffer)
 
-      return { fsBundle, wasmModule, vectorExtensionBundlePath }
+      // Use imported vector extension (import.meta.url is handled by our shim)
+      return { fsBundle, pgliteWasmModule, initdbWasmModule, vectorExtension: vector }
     } catch (error) {
       console.error('Error loading PGlite resources:', error)
       throw error
