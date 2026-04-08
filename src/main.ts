@@ -2,7 +2,13 @@ import { App, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { ConnectionTester } from './services/connectionTester';
-import { ChatPanel } from './ui/ChatPanel';
+import { DatabaseService } from './services/database';
+import { EmbeddingService } from './services/embedding';
+import { ChunkingService } from './services/chunking';
+import { ChatView } from './ChatView';
+import { CHAT_VIEW_TYPE } from './constants';
+import { RAGEngine } from './contexts/rag-context';
+import { ErrorModal } from './ui/ErrorModal';
 
 const execAsync = promisify(exec);
 const connectionTester = new ConnectionTester();
@@ -38,6 +44,7 @@ interface SmartRAGSettings {
 		dimension?: number;
 	};
 	lightRAGWorkingDir: string;
+	lightRAGServerUrl: string;  // LightRAG server URL (local or remote via Tailscale)
 }
 
 const DEFAULT_SETTINGS: SmartRAGSettings = {
@@ -65,13 +72,18 @@ const DEFAULT_SETTINGS: SmartRAGSettings = {
 		modelName: 'text-embedding-bge-m3',
 		dimension: 1024
 	},
-	lightRAGWorkingDir: '~/.openclaw/lightrag-data'
+	lightRAGWorkingDir: '~/.openclaw/lightrag-data',
+	lightRAGServerUrl: 'http://127.0.0.1:9621'  // Default: local LightRAG server
 };
 
 export default class SmartRAGPlugin extends Plugin {
-	settings: SmartRAGSettings;
-	statusBarItem: HTMLElement;
-	statusCheckInterval: number;
+	settings!: SmartRAGSettings;
+	statusBarItem!: HTMLElement;
+	statusCheckInterval!: number;
+	private databaseService: DatabaseService | null = null;
+	private settingsChangeListeners: Set<() => void> = new Set();
+	private embeddingService: EmbeddingService | null = null;
+	private chunkingService: ChunkingService | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -79,9 +91,12 @@ export default class SmartRAGPlugin extends Plugin {
 		// Register settings tab
 		this.addSettingTab(new SmartRAGSettingTab(this.app, this));
 
+		// Register view
+		this.registerView(CHAT_VIEW_TYPE, (leaf) => new ChatView(leaf, this));
+
 		// Add ribbon icon
 		this.addRibbonIcon('brain', 'Smart RAG', () => {
-			this.openChatPanel();
+			this.openChatView();
 		});
 
 		// Register command: Open chat panel
@@ -89,7 +104,7 @@ export default class SmartRAGPlugin extends Plugin {
 			id: 'open-chat-panel',
 			name: 'Open Chat Panel',
 			callback: () => {
-				this.openChatPanel();
+				this.openChatView();
 			}
 		});
 
@@ -118,13 +133,72 @@ export default class SmartRAGPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
 
-	async saveSettings() {
+	/**
+	 * Save settings (with optional new values)
+	 */
+	async saveSettings(newSettings?: SmartRAGSettings) {
+		if (newSettings) {
+			this.settings = newSettings;
+		}
 		await this.saveData(this.settings);
+		// Notify listeners
+		this.settingsChangeListeners.forEach(listener => listener());
 	}
 
-	openChatPanel() {
-		const chatPanel = new ChatPanel(this.app, this);
-		chatPanel.open();
+	/**
+	 * Add a settings change listener
+	 */
+	addSettingsChangeListener(listener: () => void): () => void {
+		this.settingsChangeListeners.add(listener);
+		return () => {
+			this.settingsChangeListeners.delete(listener);
+		};
+	}
+
+	/**
+	 * Get database service instance
+	 */
+	getDatabaseService(): DatabaseService | null {
+		return this.databaseService;
+	}
+
+	/**
+	 * Get RAG engine instance
+	 */
+	getRAGEngine(): RAGEngine | null {
+		// Return a simple object that implements the RAG interface
+		// This will be wrapped in a Promise by ChatView.tsx
+		return {
+			serverUrl: this.settings.lightRAGServerUrl,
+			settings: {
+				embeddingModelId: 'default',
+				enableAutoStartServer: false,
+				ragOptions: {
+					thresholdTokens: 1000,
+				},
+			} as any,
+			app: this.app,
+		} as any;
+	}
+
+	async openChatView() {
+		// Check if view already exists
+		const existing = this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
+		if (existing.length > 0) {
+			// Focus existing view
+			this.app.workspace.revealLeaf(existing[0]);
+			return;
+		}
+
+		// Create new view in right sidebar
+		const leaf = this.app.workspace.getRightLeaf(false);
+		if (leaf) {
+			await leaf.setViewState({
+				type: CHAT_VIEW_TYPE,
+				active: true
+			});
+			this.app.workspace.revealLeaf(leaf);
+		}
 	}
 
 	async updateStatusBar() {
@@ -155,7 +229,7 @@ export default class SmartRAGPlugin extends Plugin {
 
 			// 进程存在，检查健康状态
 			try {
-				const response = await fetch('http://127.0.0.1:9621/health');
+				const response = await fetch(`${this.settings.lightRAGServerUrl}/health`);
 				if (response.ok) {
 					const data = await response.json();
 					// 如果 health API 返回 busy 状态
@@ -233,7 +307,7 @@ export default class SmartRAGPlugin extends Plugin {
 			if (stderr) {
 				console.warn('LightRAG Server stderr:', stderr);
 			}
-		} catch (error) {
+		} catch (error: any) {
 			console.error('Failed to start LightRAG Server:', error);
 			throw error;
 		}
@@ -244,7 +318,7 @@ export default class SmartRAGPlugin extends Plugin {
 			// 停止 LightRAG 服务器进程
 			await execAsync('pkill -f lightrag-server');
 			console.log('LightRAG Server stopped');
-		} catch (error) {
+		} catch (error: any) {
 			// pkill 如果没有找到进程会返回错误，这是正常的
 			console.log('No LightRAG Server process found or already stopped');
 		}
@@ -638,6 +712,18 @@ class SmartRAGSettingTab extends PluginSettingTab {
 		container.createEl('hr');
 		container.createEl('h4', {text: '⚙️ LightRAG Server'});
 
+		// LightRAG Server URL (for remote access via Tailscale)
+		new Setting(container)
+			.setName('Server URL')
+			.setDesc('LightRAG server address. Use local (http://127.0.0.1:9621) or remote via Tailscale (http://100.x.x.x:9621)')
+			.addText(text => text
+				.setPlaceholder('http://127.0.0.1:9621')
+				.setValue(this.plugin.settings.lightRAGServerUrl)
+				.onChange(async (value) => {
+					this.plugin.settings.lightRAGServerUrl = value;
+					this.showAutoSaveBadge();
+				}));
+
 		// Server status
 		const statusSetting = new Setting(container)
 			.setName('Server Status')
@@ -683,8 +769,8 @@ class SmartRAGSettingTab extends PluginSettingTab {
 						await this.plugin.startLightRAGServer();
 						new Notice('LightRAG server started!');
 						updateStatus();
-					} catch (error) {
-						new Notice(`Failed to start server: ${error.message}`);
+					} catch (error: any) {
+						new Notice(`Failed to start server: ${error.message || error}`);
 					}
 				}))
 			.addButton(btn => btn
@@ -695,8 +781,8 @@ class SmartRAGSettingTab extends PluginSettingTab {
 						await this.plugin.stopLightRAGServer();
 						new Notice('LightRAG server stopped!');
 						updateStatus();
-					} catch (error) {
-						new Notice(`Failed to stop server: ${error.message}`);
+					} catch (error: any) {
+						new Notice(`Failed to stop server: ${error.message || error}`);
 					}
 				}));
 
