@@ -82,6 +82,7 @@ export default class SmartRAGPlugin extends Plugin {
 	statusBarItem!: HTMLElement;
 	statusCheckInterval!: number;
 	private databaseManager: DatabaseManager | null = null;
+	private databaseService: DatabaseService | null = null;
 	private settingsChangeListeners: Set<() => void> = new Set();
 	private embeddingService: EmbeddingService | null = null;
 	private chunkingService: ChunkingService | null = null;
@@ -137,7 +138,11 @@ export default class SmartRAGPlugin extends Plugin {
 			this.updateStatusBar();
 		}, 5000);
 
-		// Initialize database for local vector storage using Neural Composer's DatabaseManager
+		// TODO: Initialize database for local vector storage
+		// PGlite 0.4.3 vector extension requires ESM module system (import.meta.url)
+		// Obsidian is CommonJS environment, not compatible with ESM
+		// We'll use LightRAG for RAG functionality instead
+	/*
 		try {
 			this.databaseManager = await DatabaseManager.create(this.app);
 			console.log('Smart RAG database initialized');
@@ -145,6 +150,7 @@ export default class SmartRAGPlugin extends Plugin {
 			console.error('Failed to initialize database:', error);
 			// Don't show notice - let plugin work without database for now
 		}
+		*/
 
 		console.log('Smart RAG plugin loaded - v0.3.5-index');
 	}
@@ -153,6 +159,10 @@ export default class SmartRAGPlugin extends Plugin {
 		// Clear interval
 		if (this.statusCheckInterval) {
 			window.clearInterval(this.statusCheckInterval);
+		}
+		// Close database service
+		if (this.databaseService) {
+			this.databaseService.close();
 		}
 		console.log('Smart RAG plugin unloaded');
 	}
@@ -188,6 +198,25 @@ export default class SmartRAGPlugin extends Plugin {
 	 */
 	getDatabaseManager(): DatabaseManager | null {
 		return this.databaseManager;
+	}
+
+	/**
+	 * Get database service instance (for embedding storage)
+	 * Lazy initialization - only creates database when needed
+	 */
+	async getDatabaseService(): Promise<DatabaseService | null> {
+		if (!this.databaseService) {
+			this.databaseService = new DatabaseService();
+			try {
+				await this.databaseService.initialize();
+				console.log('Database service initialized on demand');
+			} catch (error) {
+				console.error('Failed to initialize database service:', error);
+				this.databaseService = null;
+				return null;
+			}
+		}
+		return this.databaseService;
 	}
 
 	/**
@@ -345,11 +374,6 @@ export default class SmartRAGPlugin extends Plugin {
 	 * Index current file
 	 */
 	async indexCurrentFile(): Promise<void> {
-		if (!this.databaseManager) {
-			new Notice('Database not initialized. Please restart Obsidian.');
-			return;
-		}
-
 		const activeFile = this.app.workspace.getActiveFile();
 		if (!activeFile) {
 			new Notice('No active file to index');
@@ -359,100 +383,91 @@ export default class SmartRAGPlugin extends Plugin {
 		try {
 			new Notice(`Indexing ${activeFile.name}...`);
 
-			// Use VectorManager from Neural Composer
-			const vectorManager = this.databaseManager.getVectorManager();
-			
-			// Create embedding model client
-			const embeddingModel = {
-				id: 'smart-rag-embedding',
-				dimension: this.settings.lightRAGEmbedding.dimension || 1024,
-				getEmbedding: async (text: string) => {
-					const embeddingService = new EmbeddingService();
-					const result = await embeddingService.generateEmbedding(
-						this.settings.lightRAGEmbedding.baseUrl,
-						this.settings.lightRAGEmbedding.modelName,
-						text
-					);
-					return result.embedding;
-				}
-			};
+			// Read file content
+			const content = await this.app.vault.read(activeFile);
 
-			// Index using VectorManager
-			await vectorManager.updateVaultIndex(embeddingModel, {
-				chunkSize: 1000,
-				excludePatterns: [],
-				includePatterns: [activeFile.path],
-				reindexAll: true
+			// Send to LightRAG Server
+			const response = await fetch(`${this.settings.lightRAGServerUrl}/documents/texts`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+				},
+				body: JSON.stringify({
+					texts: [content],
+				}),
 			});
 
+			if (!response.ok) {
+				throw new Error(`LightRAG server error: ${response.status}`);
+			}
+
+			const result = await response.json();
 			new Notice(`✅ Indexed ${activeFile.name}`);
+			console.log('Index result:', result);
 		} catch (error) {
 			console.error('Failed to index file:', error);
 			new Notice(`❌ Failed to index: ${error instanceof Error ? error.message : String(error)}`);
-		}
+			}
 	}
 
 	/**
-	 * Index entire vault
+	 * Index entire vault using LightRAG Server
 	 */
 	async indexVault(): Promise<void> {
-		if (!this.databaseManager) {
-			new Notice('Database not initialized. Please restart Obsidian.');
-			return;
-		}
-
 		try {
 			new Notice('Indexing entire vault... This may take a while.');
 
-			// Use VectorManager from Neural Composer
-			const vectorManager = this.databaseManager.getVectorManager();
-			
-			// Create embedding model client
-			const embeddingModel = {
-				id: 'smart-rag-embedding',
-				dimension: this.settings.lightRAGEmbedding.dimension || 1024,
-				getEmbedding: async (text: string) => {
-					const embeddingService = new EmbeddingService();
-					const result = await embeddingService.generateEmbedding(
-						this.settings.lightRAGEmbedding.baseUrl,
-						this.settings.lightRAGEmbedding.modelName,
-						text
-					);
-					return result.embedding;
+			const files = this.app.vault.getMarkdownFiles();
+			let successCount = 0;
+			let failCount = 0;
+
+			for (const file of files) {
+				try {
+					const content = await this.app.vault.read(file);
+
+					// Send to LightRAG Server
+					const response = await fetch(`${this.settings.lightRAGServerUrl}/documents/texts`, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+						},
+						body: JSON.stringify({
+							texts: [content],
+						}),
+					});
+
+					if (response.ok) {
+						successCount++;
+					} else {
+						failCount++;
+						console.warn(`Failed to index ${file.path}: ${response.status}`);
+					}
+				} catch (error) {
+					failCount++;
+					console.error(`Error indexing ${file.path}:`, error);
 				}
-			};
+			}
 
-			// Index entire vault using VectorManager
-			await vectorManager.updateVaultIndex(embeddingModel, {
-				chunkSize: 1000,
-				excludePatterns: [],
-				includePatterns: [],
-				reindexAll: false
-			}, (progress) => {
-				console.log(`Index progress: ${progress.completedChunks}/${progress.totalChunks}`);
-			});
-
-			const stats = await this.getDatabaseStats();
-			new Notice(`✅ Index complete: ${stats?.documentsCount || 0} files, ${stats?.chunksCount || 0} chunks`);
+			new Notice(`✅ Indexed ${successCount} files, ${failCount} failed`);
 		} catch (error) {
 			console.error('Failed to index vault:', error);
 			new Notice(`❌ Failed to index vault: ${error instanceof Error ? error.message : String(error)}`);
-		}
+			}
 	}
 
 	/**
-	 * Get database statistics
+	 * Get database statistics from LightRAG Server
 	 */
 	async getDatabaseStats(): Promise<{ documentsCount: number; chunksCount: number } | null> {
-		if (!this.databaseManager) {
-			return null;
-		}
 		try {
-			const vectorManager = this.databaseManager.getVectorManager();
-			const stats = await vectorManager.getEmbeddingDbStats();
+			const response = await fetch(`${this.settings.lightRAGServerUrl}/health`);
+			if (!response.ok) {
+				return null;
+			}
+			const result = await response.json();
 			return {
-				documentsCount: stats.documentCount,
-				chunksCount: stats.chunkCount
+				documentsCount: result.documentCount || 0,
+				chunksCount: result.chunkCount || 0
 			};
 		} catch (error) {
 			console.error('Failed to get database stats:', error);
@@ -999,12 +1014,16 @@ class SmartRAGSettingTab extends PluginSettingTab {
 			.setDesc('Delete all indexed documents and chunks')
 			.addButton(btn => btn
 				.setButtonText('Clear Database')
-				.setDanger()
 				.onClick(async () => {
 					if (confirm('Are you sure you want to clear the database? This cannot be undone.')) {
-						await this.plugin.getDatabaseService()?.clearDatabase();
-						new Notice('Database cleared');
-						updateStats();
+						const db = await this.plugin.getDatabaseService();
+						if (db) {
+							await db.clearDatabase();
+							new Notice('Database cleared');
+							updateStats();
+						} else {
+							new Notice('Database not initialized. Index some files first.');
+						}
 					}
 				}));
 	}
