@@ -1,5 +1,5 @@
 import * as Tooltip from '@radix-ui/react-tooltip'
-import { Check, CopyIcon, Pencil } from 'lucide-react'
+import { Check, CopyIcon, Pencil, BarChart3, Loader2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
 import {
@@ -87,6 +87,41 @@ function EditButton({ isEditing, onToggleEdit }: { isEditing: boolean, onToggleE
 }
 // ----------------------------------
 
+// Excalidraw Button
+function ExcalidrawButton({ 
+  isGenerating, 
+  onGenerate 
+}: { 
+  isGenerating: boolean
+  onGenerate: () => void 
+}) {
+  return (
+    <Tooltip.Provider delayDuration={0}>
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>
+          <button
+            onClick={onGenerate}
+            className="clickable-icon"
+            aria-label="Generate Diagram"
+            disabled={isGenerating}
+          >
+            {isGenerating ? (
+              <Loader2 size={12} className="smart-rag-spinner-icon" />
+            ) : (
+              <BarChart3 size={12} />
+            )}
+          </button>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content className="smart-rag-tooltip-content">
+            {isGenerating ? 'Generating diagram...' : 'Generate diagram'}
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
+  )
+}
+
 function LLMResponseInfoButton({
   messages,
 }: {
@@ -155,14 +190,26 @@ export default function AssistantToolMessageGroupActions({
   // --- CORA MOD: Recibimos props de edición ---
   onToggleEdit,
   isEditing,
+  // --- Excalidraw props ---
+  onGenerateExcalidraw,
+  isExcalidrawGenerating,
 }: {
   messages: AssistantToolMessageGroup
   onToggleEdit?: () => void
   isEditing?: boolean
+  onGenerateExcalidraw?: () => void
+  isExcalidrawGenerating?: boolean
 }) {
   return (
     <div className="smart-rag-assistant-message-actions">
       <LLMResponseInfoButton messages={messages} />
+      {/* Excalidraw Button */}
+      {onGenerateExcalidraw && (
+        <ExcalidrawButton 
+          isGenerating={!!isExcalidrawGenerating} 
+          onGenerate={onGenerateExcalidraw} 
+        />
+      )}
       {/* Botón de Editar (Solo si la función existe) */}
       {onToggleEdit && (
         <EditButton isEditing={!!isEditing} onToggleEdit={onToggleEdit} />

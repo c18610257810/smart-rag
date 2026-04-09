@@ -2732,3 +2732,120 @@ button.smart-rag-chat-input-model-select {
   font-weight: var(--font-semibold);
   color: var(--text-accent);
 }
+
+/* Excalidraw Message Styles */
+.smart-rag-excalidraw-message {
+  margin: var(--size-4-2) 0;
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  overflow: hidden;
+}
+
+.smart-rag-excalidraw-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--size-2-2) var(--size-4-2);
+  background: var(--background-modifier-hover);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.smart-rag-excalidraw-type {
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-medium);
+  color: var(--text-muted);
+}
+
+.smart-rag-excalidraw-actions {
+  display: flex;
+  gap: var(--size-2-2);
+}
+
+.smart-rag-excalidraw-action-btn {
+  background: transparent;
+  border: none;
+  padding: var(--size-2-2);
+  cursor: pointer;
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.smart-rag-excalidraw-action-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.smart-rag-excalidraw-image-container {
+  padding: var(--size-4-2);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: var(--background-primary);
+  overflow: auto;
+  max-height: 400px;
+}
+
+.smart-rag-excalidraw-image-container.zoomed {
+  max-height: none;
+}
+
+.smart-rag-excalidraw-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-s);
+}
+
+.smart-rag-excalidraw-image-container.zoomed .smart-rag-excalidraw-image {
+  max-width: none;
+}
+
+.smart-rag-excalidraw-summary {
+  padding: var(--size-4-2);
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.smart-rag-excalidraw-summary p {
+  margin: 0;
+}
+
+.smart-rag-excalidraw-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-4);
+  color: var(--text-muted);
+}
+
+.smart-rag-excalidraw-error {
+  padding: var(--size-4-2);
+  background: var(--background-modifier-error);
+  border-radius: var(--radius-s);
+  margin: var(--size-4-2);
+  color: var(--text-error);
+  font-size: var(--font-ui-small);
+}
+
+.smart-rag-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--text-muted);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: smart-rag-spin 1s linear infinite;
+}
+
+@keyframes smart-rag-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.smart-rag-spinner-icon {
+  animation: smart-rag-spin 1s linear infinite;
+}

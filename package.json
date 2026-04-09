@@ -1,7 +1,7 @@
 {
   "name": "smart-rag",
-  "version": "0.3.1-tabs",
-  "description": "Smart RAG - Semantic RAG for Obsidian Vault with PGlite vector storage and LLM-powered chat",
+  "version": "1.0.0",
+  "description": "Smart RAG - Semantic RAG for Obsidian Vault with Qdrant vector storage, RAG-Anything document parsing, and LLM-powered chat",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs dev",
@@ -13,8 +13,9 @@
     "rag",
     "semantic",
     "vector",
-    "pglite",
-    "lightrag"
+    "qdrant",
+    "rag-anything"
+  ],
   ],
   "author": "Frank Zhang",
   "license": "MIT",
@@ -31,7 +32,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.85.0",
-    "@electric-sql/pglite": "0.4.3",
+    "@electric-sql/pglite": "0.2.12",
     "@google/generative-ai": "^0.24.1",
     "@lexical/react": "^0.42.0",
     "@modelcontextprotocol/sdk": "^1.29.0",

@@ -138,19 +138,15 @@ export default class SmartRAGPlugin extends Plugin {
 			this.updateStatusBar();
 		}, 5000);
 
-		// TODO: Initialize database for local vector storage
-		// PGlite 0.4.3 vector extension requires ESM module system (import.meta.url)
-		// Obsidian is CommonJS environment, not compatible with ESM
-		// We'll use LightRAG for RAG functionality instead
-	/*
+		// Initialize local vector database (PGlite 0.4.3 + vector extension)
+		// ESM compatibility handled by import-meta-url-shim.js
 		try {
 			this.databaseManager = await DatabaseManager.create(this.app);
-			console.log('Smart RAG database initialized');
+			console.log('Smart RAG database initialized (PGlite 0.4.3 + vector)');
 		} catch (error) {
 			console.error('Failed to initialize database:', error);
-			// Don't show notice - let plugin work without database for now
+			// Plugin can still work with LightRAG server if local DB fails
 		}
-		*/
 
 		console.log('Smart RAG plugin loaded - v0.3.5-index');
 	}
@@ -160,7 +156,11 @@ export default class SmartRAGPlugin extends Plugin {
 		if (this.statusCheckInterval) {
 			window.clearInterval(this.statusCheckInterval);
 		}
-		// Close database service
+		// Close local vector database
+		if (this.databaseManager) {
+			this.databaseManager.cleanup();
+		}
+		// Close database service (legacy)
 		if (this.databaseService) {
 			this.databaseService.close();
 		}

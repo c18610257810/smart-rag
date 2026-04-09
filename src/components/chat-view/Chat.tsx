@@ -30,6 +30,7 @@ import {
   ChatMessage,
   ChatToolMessage,
   ChatUserMessage,
+  ChatAssistantMessage,
 } from '../../types/chat'
 import {
   MentionableBlock,
@@ -47,6 +48,8 @@ import { PromptGenerator } from '../../utils/chat/promptGenerator'
 import { readTFileContent } from '../../utils/obsidian'
 import { ErrorModal } from '../modals/ErrorModal'
 import { TemplateSectionModal } from '../modals/TemplateSectionModal'
+import { ExcalidrawGenerator } from '../../services/excalidrawGenerator'
+import { ExcalidrawRenderer } from '../../services/excalidrawRenderer'
 
 import AssistantToolMessageGroupItem from './AssistantToolMessageGroupItem'
 import ChatUserInput, { ChatUserInputRef } from '../chat-input/ChatUserInput'
@@ -56,6 +59,7 @@ import QueryProgress, { QueryProgressState } from './QueryProgress'
 import { useAutoScroll } from './useAutoScroll'
 import { useChatStreamManager } from './useChatStreamManager'
 import UserMessageItem from './UserMessageItem'
+import ExcalidrawMessage from './ExcalidrawMessage'
 
 const getNewInputMessage = (app: App): ChatUserMessage => {
   return {
@@ -131,6 +135,9 @@ const Chat = forwardRef<ChatRef, ChatProps>((props, ref) => {
   const [queryProgress, setQueryProgress] = useState<QueryProgressState>({
     type: 'idle',
   })
+  
+  // Excalidraw generation state
+  const [excalidrawGeneratingMessageId, setExcalidrawGeneratingMessageId] = useState<string | null>(null)
 
   const groupedChatMessages: (ChatUserMessage | AssistantToolMessageGroup)[] =
     useMemo(() => {
@@ -444,6 +451,109 @@ const Chat = forwardRef<ChatRef, ChatProps>((props, ref) => {
     })
   }, [submitChatMutation, chatMessages, currentConversationId])
 
+  // Excalidraw generation handler
+  const handleGenerateExcalidraw = useCallback(async (messageId: string) => {
+    // Find the assistant message
+    const assistantMessage = chatMessages.find(
+      (msg) => msg.id === messageId && msg.role === 'assistant'
+    ) as ChatAssistantMessage | undefined
+    
+    if (!assistantMessage) return
+    
+    // Find the previous user message with similarity search results
+    const messageIndex = chatMessages.findIndex((msg) => msg.id === messageId)
+    let queryResults = ''
+    let userPrompt = ''
+    
+    for (let i = messageIndex - 1; i >= 0; i--) {
+      const msg = chatMessages[i]
+      if (msg.role === 'user') {
+        if (msg.similaritySearchResults && msg.similaritySearchResults.length > 0) {
+          queryResults = msg.similaritySearchResults
+            .map((r) => r.content || '')
+            .join('\n\n---\n\n')
+        }
+        if (msg.promptContent && typeof msg.promptContent === 'string') {
+          userPrompt = msg.promptContent
+        }
+        break
+      }
+    }
+    
+    if (!queryResults) {
+      new Notice('No query results found to generate diagram')
+      return
+    }
+    
+    setExcalidrawGeneratingMessageId(messageId)
+    
+    try {
+      // Get LLM settings
+      const chatModel = settings.chatModels.find(m => m.id === settings.chatModelId)
+      const provider = settings.providers.find(p => p.id === chatModel?.providerId)
+      if (!chatModel || !provider) {
+        throw new Error('Chat model or provider not found')
+      }
+      
+      const generator = new ExcalidrawGenerator()
+      const result = await generator.generate(
+        provider.baseUrl || '',
+        provider.apiKey || '',
+        chatModel.model,
+        queryResults,
+        userPrompt || 'Generate a visual diagram'
+      )
+      
+      // Update the message with the result
+      setChatMessages((prevMessages) =>
+        prevMessages.map((msg) =>
+          msg.id === messageId && msg.role === 'assistant'
+            ? {
+                ...msg,
+                excalidraw: {
+                  isGenerating: false,
+                  result,
+                },
+              }
+            : msg
+        )
+      )
+      
+    } catch (error) {
+      console.error('Failed to generate Excalidraw:', error)
+      new Notice(`Failed to generate diagram: ${error instanceof Error ? error.message : String(error)}`)
+      
+      // Update with error
+      setChatMessages((prevMessages) =>
+        prevMessages.map((msg) =>
+          msg.id === messageId && msg.role === 'assistant'
+            ? {
+                ...msg,
+                excalidraw: {
+                  isGenerating: false,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+              }
+            : msg
+        )
+      )
+    } finally {
+      setExcalidrawGeneratingMessageId(null)
+    }
+  }, [chatMessages, settings])
+
+  // Check if a message had @vault query
+  const hasVaultQuery = useCallback((messageId: string): boolean => {
+    const messageIndex = chatMessages.findIndex((msg) => msg.id === messageId)
+    for (let i = messageIndex - 1; i >= 0; i--) {
+      const msg = chatMessages[i]
+      if (msg.role === 'user') {
+        return !!(msg.similaritySearchResults && msg.similaritySearchResults.length > 0)
+      }
+    }
+    return false
+  }, [chatMessages])
+
   useEffect(() => {
     setFocusedMessageId(inputMessage.id)
   }, [])
@@ -684,22 +794,30 @@ const Chat = forwardRef<ChatRef, ChatProps>((props, ref) => {
               }}
             />
           ) : (
-            <AssistantToolMessageGroupItem
-              key={messageOrGroup.at(0)?.id}
-              messages={messageOrGroup}
-              contextMessages={groupedChatMessages
-                .slice(0, index + 1)
-                .flatMap((messageOrGroup): ChatMessage[] =>
-                  !Array.isArray(messageOrGroup)
-                    ? [messageOrGroup]
-                    : messageOrGroup,
-                )}
-              conversationId={currentConversationId}
-              isApplying={applyMutation.isPending}
-              onApply={handleApply}
-              onToolMessageUpdate={handleToolMessageUpdate}
-              onAssistantMessageUpdate={handleAssistantMessageUpdate}
-            />
+            <>
+              <AssistantToolMessageGroupItem
+                key={messageOrGroup.at(0)?.id}
+                messages={messageOrGroup}
+                contextMessages={groupedChatMessages
+                  .slice(0, index + 1)
+                  .flatMap((messageOrGroup): ChatMessage[] =>
+                    !Array.isArray(messageOrGroup)
+                      ? [messageOrGroup]
+                      : messageOrGroup,
+                  )}
+                conversationId={currentConversationId}
+                isApplying={applyMutation.isPending}
+                onApply={handleApply}
+                onToolMessageUpdate={handleToolMessageUpdate}
+                onAssistantMessageUpdate={handleAssistantMessageUpdate}
+                onGenerateExcalidraw={() => {
+                  const assistantMsg = messageOrGroup.find(m => m.role === 'assistant')
+                  if (assistantMsg) handleGenerateExcalidraw(assistantMsg.id)
+                }}
+                isExcalidrawGenerating={excalidrawGeneratingMessageId === messageOrGroup.find(m => m.role === 'assistant')?.id}
+                hasVaultQuery={hasVaultQuery(messageOrGroup.find(m => m.role === 'assistant')?.id || '')}
+              />
+            </>
           ),
         )}
         <QueryProgress state={queryProgress} />

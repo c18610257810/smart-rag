@@ -1,9 +1,9 @@
 {
   "id": "smart-rag",
   "name": "Smart RAG",
-  "version": "0.3.1",
+  "version": "1.0.0",
   "minAppVersion": "1.0.0",
-  "description": "Semantic RAG for Obsidian Vault with PGlite vector storage and LLM-powered chat",
+  "description": "Semantic RAG for Obsidian Vault with Qdrant vector storage, RAG-Anything document parsing, and LLM-powered chat",
   "author": "Frank Zhang",
   "authorUrl": "https://github.com/openclaw",
   "isDesktopOnly": true

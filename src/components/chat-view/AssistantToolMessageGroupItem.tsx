@@ -3,6 +3,7 @@ import {
   AssistantToolMessageGroup,
   ChatMessage,
   ChatToolMessage,
+  ChatAssistantMessage,
 } from '../../types/chat'
 
 import AssistantMessageAnnotations from './AssistantMessageAnnotations'
@@ -10,6 +11,7 @@ import AssistantMessageContent from './AssistantMessageContent'
 import AssistantMessageReasoning from './AssistantMessageReasoning'
 import AssistantToolMessageGroupActions from './AssistantToolMessageGroupActions'
 import ToolMessage from './ToolMessage'
+import ExcalidrawMessage from './ExcalidrawMessage'
 
 export type AssistantToolMessageGroupItemProps = {
   messages: AssistantToolMessageGroup
@@ -19,6 +21,10 @@ export type AssistantToolMessageGroupItemProps = {
   onApply: (blockToApply: string, chatMessages: ChatMessage[]) => void
   onToolMessageUpdate: (message: ChatToolMessage) => void
   onAssistantMessageUpdate: (messageId: string, newContent: string) => void
+  // Excalidraw props
+  onGenerateExcalidraw?: () => void
+  isExcalidrawGenerating?: boolean
+  hasVaultQuery?: boolean
 }
 
 export default function AssistantToolMessageGroupItem({
@@ -29,6 +35,10 @@ export default function AssistantToolMessageGroupItem({
   onApply,
   onToolMessageUpdate,
   onAssistantMessageUpdate,
+  // Excalidraw props
+  onGenerateExcalidraw,
+  isExcalidrawGenerating,
+  hasVaultQuery,
 }: AssistantToolMessageGroupItemProps) {
   
   // --- CORA MOD: ESTADO DE EDICIÓN LOCAL ---
@@ -77,12 +87,23 @@ export default function AssistantToolMessageGroupItem({
           </div>
         ),
       )}
+      {/* Excalidraw diagram - render between content and actions */}
+      {(() => {
+        const assistantMsg = messages.find(m => m.role === 'assistant') as ChatAssistantMessage | undefined
+        if (assistantMsg?.excalidraw?.result) {
+          return <ExcalidrawMessage result={assistantMsg.excalidraw.result} />
+        }
+        return null
+      })()}
       {messages.length > 0 && (
         <AssistantToolMessageGroupActions 
             messages={messages} 
             // --- CORA MOD: Conectar el botón ---
             onToggleEdit={() => setIsEditing(!isEditing)}
             isEditing={isEditing}
+            // Excalidraw props - only show if hasVaultQuery
+            onGenerateExcalidraw={hasVaultQuery ? onGenerateExcalidraw : undefined}
+            isExcalidrawGenerating={isExcalidrawGenerating}
         />
       )}
     </div>

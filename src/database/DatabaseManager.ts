@@ -1,5 +1,4 @@
-import { PGlite } from '@electric-sql/pglite'
-import { vector } from '@electric-sql/pglite/vector'
+import { PGlite, type PGliteOptions } from '@electric-sql/pglite'
 import { PgliteDatabase, drizzle } from 'drizzle-orm/pglite'
 import { App, normalizePath, requestUrl } from 'obsidian'
 
@@ -9,6 +8,40 @@ import { PGLiteAbortedException } from './exception'
 import migrations from './migrations.json'
 import { LegacyTemplateManager } from './modules/template/TemplateManager'
 import { VectorManager } from './modules/vector/VectorManager'
+
+/**
+ * Create a vector extension object that fetches vector.tar.gz from CDN at runtime.
+ *
+ * The stock `import { vector } from '@electric-sql/pglite/vector'` relies on
+ * `import.meta.url` / `__filename` to resolve `../vector.tar.gz` at runtime.
+ * After esbuild bundles everything into a single `main.js`, that relative path
+ * resolves to the Obsidian plugins directory where `vector.tar.gz` doesn't exist.
+ *
+ * Instead, we fetch the tar.gz from unpkg at runtime and pass the Blob directly
+ * to the extension setup, bypassing the broken URL resolution.
+ */
+async function createVectorExtension() {
+  const PGLITE_VERSION = '0.2.12'
+  const vectorTarUrl =
+    `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/vector.tar.gz`
+
+  return {
+    name: 'pgvector',
+    // PGlite extension setup: return emscriptenOpts + bundlePath.
+    // Instead of a relative URL (which breaks after bundling), we fetch
+    // the tar.gz ourselves and pass it as a blob URL.
+    // Uses Obsidian's requestUrl API (bypasses CORS/CDN restrictions).
+    setup: async (emscriptenOpts: unknown) => {
+      const resp = await requestUrl(vectorTarUrl)
+      const blob = new Blob([resp.arrayBuffer], { type: 'application/gzip' })
+      const blobUrl = URL.createObjectURL(blob)
+      return {
+        emscriptenOpts,
+        bundlePath: new URL(blobUrl),
+      }
+    },
+  }
+}
 
 export class DatabaseManager {
   private app: App
@@ -101,13 +134,12 @@ export class DatabaseManager {
 
   private async createNewDatabase() {
     try {
-      const { fsBundle, pgliteWasmModule, initdbWasmModule, vectorExtension } =
+      const { fsBundle, wasmModule, vectorExtension } =
         await this.loadPGliteResources()
-      // PGlite 0.4.3 uses new PGlite() instead of PGlite.create()
+      // PGlite 0.2.12 uses new PGlite() with wasmModule + fsBundle
       this.pgClient = new PGlite('memory://', {
         fsBundle: fsBundle,
-        pgliteWasmModule: pgliteWasmModule,
-        initdbWasmModule: initdbWasmModule,
+        wasmModule: wasmModule,
         extensions: {
           vector: vectorExtension,
         },
@@ -140,14 +172,13 @@ export class DatabaseManager {
       }
       const fileBuffer = await this.app.vault.adapter.readBinary(this.dbPath)
       const fileBlob = new Blob([fileBuffer], { type: 'application/x-gzip' })
-      const { fsBundle, pgliteWasmModule, initdbWasmModule, vectorExtension } =
+      const { fsBundle, wasmModule, vectorExtension } =
         await this.loadPGliteResources()
-      // PGlite 0.4.3 uses new PGlite() with loadDataDir option
+      // PGlite 0.2.12 uses new PGlite() with loadDataDir option
       this.pgClient = new PGlite('memory://', {
         loadDataDir: fileBlob,
         fsBundle: fsBundle,
-        pgliteWasmModule: pgliteWasmModule,
-        initdbWasmModule: initdbWasmModule,
+        wasmModule: wasmModule,
         extensions: {
           vector: vectorExtension,
         },
@@ -196,7 +227,7 @@ export class DatabaseManager {
       )
     } catch (error) {
       console.error('Error saving database:', error)
-    }
+  }
   }
 
   async cleanup() {
@@ -209,35 +240,31 @@ export class DatabaseManager {
     this.db = null
   }
 
-  // TODO: This function is a temporary workaround chosen due to the difficulty of bundling postgres.wasm and postgres.data from node_modules into a single JS file. The ultimate goal is to bundle everything into one JS file in the future.
+  // Load PGlite resources (WASM, fs bundle, vector extension) from CDN
   private async loadPGliteResources(): Promise<{
     fsBundle: Blob
-    pgliteWasmModule: WebAssembly.Module
-    initdbWasmModule: WebAssembly.Module
-    vectorExtension: typeof vector
+    wasmModule: WebAssembly.Module
+    vectorExtension: NonNullable<PGliteOptions['extensions']>['vector']
   }> {
     try {
-      const PGLITE_VERSION = '0.4.3'
-      const [fsBundleResponse, pgliteWasmResponse, initdbWasmResponse] = await Promise.all([
-        requestUrl(
-          `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/pglite.data`,
-        ),
-        requestUrl(
-          `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/pglite.wasm`,
-        ),
-        requestUrl(
-          `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/initdb.wasm`,
-        ),
-      ])
+      const PGLITE_VERSION = '0.2.12'
+      const [fsBundleResponse, wasmResponse, vectorExt] =
+        await Promise.all([
+          requestUrl(
+            `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/postgres.data`,
+          ),
+          requestUrl(
+            `https://unpkg.com/@electric-sql/pglite@${PGLITE_VERSION}/dist/postgres.wasm`,
+          ),
+          createVectorExtension(),
+        ])
 
       const fsBundle = new Blob([fsBundleResponse.arrayBuffer], {
         type: 'application/octet-stream',
       })
-      const pgliteWasmModule = await WebAssembly.compile(pgliteWasmResponse.arrayBuffer)
-      const initdbWasmModule = await WebAssembly.compile(initdbWasmResponse.arrayBuffer)
+      const wasmModule = await WebAssembly.compile(wasmResponse.arrayBuffer)
 
-      // Use imported vector extension (import.meta.url is handled by our shim)
-      return { fsBundle, pgliteWasmModule, initdbWasmModule, vectorExtension: vector }
+      return { fsBundle, wasmModule, vectorExtension: vectorExt }
     } catch (error) {
       console.error('Error loading PGlite resources:', error)
       throw error

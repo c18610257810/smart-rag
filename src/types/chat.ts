@@ -7,6 +7,7 @@ import { ContentPart } from './llm/request'
 import { Annotation, ResponseUsage } from './llm/response'
 import { Mentionable, SerializedMentionable } from './mentionable'
 import { ToolCallRequest, ToolCallResponse } from './tool-call.types'
+import { ExcalidrawGenerationResult } from '../services/excalidrawGenerator'
 
 export type ChatUserMessage = {
   role: 'user'
@@ -28,6 +29,11 @@ export type ChatAssistantMessage = {
   metadata?: {
     usage?: ResponseUsage
     model?: ChatModel // TODO: migrate legacy data to new model type
+  }
+  excalidraw?: {
+    isGenerating?: boolean
+    result?: ExcalidrawGenerationResult
+    error?: string
   }
 }
 export type ChatToolMessage = {

@@ -7,24 +7,69 @@ import fs from 'fs'
 const nodeBuiltins = [...builtins, ...builtins.map((mod) => `node:${mod}`)]
 
 /**
- * Plugin to make pglite's IN_NODE check evaluate to false.
- * pglite checks if it's running in node by evaluating
- * ```ts
- *   typeof process === 'object' &&
- *   typeof process.versions === 'object' &&
- *   typeof process.versions.node === 'string'
- * ```
- * This plugin injects an empty process object at the top of pglite files.
- * 
- * @see https://github.com/electric-sql/pglite/blob/fea963739ccf08ef546265fa3e401bf93f53e81a/packages/pglite/src/utils.ts#L6-L9
+ * PGlite plugin: patch postgres.js to load WASM/data from local plugin dir
+ * instead of embedding in bundle or fetching from CDN.
+ *
+ * Strategy:
+ * 1. Replace fetch() calls with a function that reads from __dirname
+ * 2. Use Node.js fs.readFileSync to load files at runtime
  */
-const pgliteShimPlugin = {
-  name: 'pglite-shim-plugin',
+const pglitePlugin = {
+  name: 'pglite-plugin',
   setup(build) {
     build.onLoad({ filter: /@electric-sql\/pglite/ }, async (args) => {
-      const source = await fs.promises.readFile(args.path, 'utf8')
-      const shimSource = `const process = {};\n${source}`
-      return { contents: shimSource, loader: 'js' }
+      let source = await fs.promises.readFile(args.path, 'utf8')
+
+      // 1. Process shim
+      source = `const process = {};\n${source}`
+
+      if (args.path.endsWith('postgres.js')) {
+        // Inject a fetch interceptor that reads from local filesystem
+        const injectCode = [
+          'var Module = moduleArg;',
+          // Local file loader using Node.js fs
+          `function _localFetch(name) {`,
+          `  try {`,
+          `    var fs = require('fs');`,
+          `    var dir = __dirname || '.';`,
+          `    var filePath = dir + '/' + name;`,
+          `    if (fs.existsSync(filePath)) {`,
+          `      var buf = fs.readFileSync(filePath);`,
+          `      return Promise.resolve({`,
+          `        ok: true, status: 200, url: name,`,
+          `        arrayBuffer: function() { return Promise.resolve(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)) },`,
+          `        blob: function() { return Promise.resolve(new Blob([buf])) }`,
+          `      });`,
+          `    }`,
+          `  } catch(e) {}`,
+          `  return Promise.reject(new Error('Local file not found: ' + name));`,
+          `}`,
+        ].join('\n')
+
+        source = source.replace('var Module = moduleArg;', injectCode)
+
+        // Replace ALL fetch calls with _localFetch
+        // fetch(packageName) in fetchRemotePackage
+        source = source.replace(/fetch\(packageName\)/g, '_localFetch(packageName)')
+        // fetch(binaryFile, {credentials:...}) in instantiateAsync
+        source = source.replace(
+          /fetch\(binaryFile, \{ credentials: 'same-origin' \}\)/g,
+          "_localFetch(binaryFile.split('/').pop())"
+        )
+        // fetch(url, {credentials:...}) in readAsync
+        source = source.replace(
+          /fetch\(url, \{ credentials: 'same-origin' \}\)/g,
+          "_localFetch(url.split('/').pop())"
+        )
+
+        // Also disable the instantiateStreaming fetch path
+        source = source.replace(
+          /if \(!binary && typeof WebAssembly\.instantiateStreaming/,
+          'if(false&&typeof WebAssembly.instantiateStreaming'
+        )
+      }
+
+      return { contents: source, loader: 'js' }
     })
   },
 }
@@ -74,8 +119,7 @@ const context = await esbuild.context({
   outfile: 'main.js',
   minify: prod,
   metafile: true,
-  plugins: [pgliteShimPlugin],
-  // React/JSX support
+  plugins: [pglitePlugin],
   loader: {
     '.tsx': 'tsx',
     '.ts': 'ts',
