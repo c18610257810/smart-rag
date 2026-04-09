@@ -238,9 +238,16 @@ Generate the diagram now. Remember to respond ONLY with valid JSON.`;
    */
   private parseLLMResponse(content: string): ExcalidrawGenerationResult {
     try {
-      // Try to extract JSON from markdown code block
+      // Try to extract JSON from markdown code block (greedy match)
       const jsonMatch = content.match(/```json\s*([\s\S]*)\s*```/);
-      let jsonStr = jsonMatch ? jsonMatch[1] : content;
+      let jsonStr = jsonMatch ? jsonMatch[1].trim() : content;
+      // Also try to find any JSON object if no code block
+      if (!jsonMatch) {
+        const jsonObjMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonObjMatch) {
+          jsonStr = jsonObjMatch[0];
+        }
+      }
       // 去除可能残留的代码块标记
       jsonStr = jsonStr.replace(/^```json\s*/, '').replace(/\s*```$/, '').trim();
       

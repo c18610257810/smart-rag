@@ -110,8 +110,79 @@ export class ExcalidrawRenderer {
       // Get elements from JSON
       const elements = excalidrawJson.elements || [];
       
-      // Add all elements at once using addElementsToView
-      await ea.addElementsToView(false, false, elements);
+      // Add elements individually using ExcalidrawAutomate API
+      // addElementsToView doesn't accept raw elements as third param
+      for (const element of elements) {
+        switch (element.type) {
+          case 'rectangle':
+            ea.addRectangle(
+              element.x,
+              element.y,
+              element.width || 200,
+              element.height || 100,
+              {
+                id: element.id,
+                color: element.strokeColor || '#000000',
+                fillStyle: element.fillStyle,
+                strokeStyle: element.strokeStyle,
+                strokeWidth: element.strokeWidth,
+              }
+            );
+            break;
+
+          case 'ellipse':
+            ea.addEllipse(
+              element.x,
+              element.y,
+              element.width || 200,
+              element.height || 100,
+              { id: element.id, color: element.strokeColor || '#000000' }
+            );
+            break;
+
+          case 'text':
+            ea.addText(
+              element.x,
+              element.y,
+              element.text || '',
+              {
+                id: element.id,
+                color: element.strokeColor || '#000000',
+                fontSize: element.fontSize || 16,
+                fontFamily: element.fontFamily,
+                textAlign: element.textAlign as any,
+              }
+            );
+            break;
+
+          case 'arrow':
+          case 'line':
+            if (element.points && element.points.length >= 2) {
+              ea.addLine(
+                element.x,
+                element.y,
+                element.points,
+                {
+                  id: element.id,
+                  color: element.strokeColor || '#000000',
+                  startArrowhead: element.startArrowhead || null,
+                  endArrowhead: element.endArrowhead || null,
+                }
+              );
+            }
+            break;
+
+          case 'diamond':
+            ea.addRectangle(
+              element.x,
+              element.y,
+              element.width || 200,
+              element.height || 100,
+              { id: element.id, color: element.strokeColor || '#000000' }
+            );
+            break;
+        }
+      }
 
       // Generate PNG
       const pngBlob = await ea.createPNG(50, 2, darkMode);
@@ -218,8 +289,8 @@ export class ExcalidrawRenderer {
         }
       }
 
-      // Add to view and save
-      await ea.addElementsToView(false, true, true);
+      // Save the drawing (addElementsToView with save=true)
+      await ea.addElementsToView(false, true);
 
       // Generate PNG
       const pngBlob = await ea.createPNG(50, 2, darkMode);

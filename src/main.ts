@@ -1,30 +1,25 @@
 import { App, Plugin, PluginSettingTab, Setting, Notice } from 'obsidian';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { ConnectionTester } from './services/connectionTester';
-import { DatabaseService } from './services/database';
-import { EmbeddingService } from './services/embedding';
-import { ChunkingService } from './services/chunking';
 import { ChatView } from './ChatView';
 import { CHAT_VIEW_TYPE } from './constants';
-import { RAGEngine } from './contexts/rag-context';
-import { ErrorModal } from './ui/ErrorModal';
-import { DatabaseManager } from './database/DatabaseManager';
+import { QdrantManager } from './core/qdrant/QdrantManager';
+import { QdrantClientWrapper } from './core/qdrant/QdrantClient';
+import { RAGAnythingManager } from './core/rag-anything/RAGAnythingManager';
+import { IndexingEngine, IndexingProgress } from './core/indexing/IndexingEngine';
+import { QueryEngine, QueryResult } from './core/retrieval/QueryEngine';
+import { PlatformManager } from './utils/PlatformManager';
 
 const execAsync = promisify(exec);
-const connectionTester = new ConnectionTester();
 
 /**
- * Smart RAG - Semantic RAG for Obsidian Vault
- * Version: 0.1.0-skeleton (Phase 1: Minimum Skeleton)
+ * Smart RAG v1.0.0 - Qdrant-based RAG for Obsidian
  * 
  * Architecture:
- * - Chat LLM: User dialogue generation
- * - LightRAG LLM: Internal LightRAG processing
- * - Semantic Chunk LLM: Text semantic chunking
- * - LightRAG Embedding: Vectorization
- * 
- * Each LLM config: URL, API Key, model name, max token, temperature
+ * - Qdrant: External vector database (replaces PGlite)
+ * - RAG-Anything: Multi-format document parsing (PDF, Word, PPT, Excel, images)
+ * - LLM: Chat dialogue generation
+ * - Embedding: Vector generation for indexing and retrieval
  */
 
 interface LLMConfig {
@@ -35,17 +30,39 @@ interface LLMConfig {
 	temperature?: number;
 }
 
+interface QdrantSettings {
+	enabled: boolean;
+	httpPort: number;
+	dataDir: string;
+	autoStart: boolean;
+}
+
+interface RAGAnythingSettings {
+	enabled: boolean;
+	httpPort: number;
+	autoStart: boolean;
+}
+
+interface EmbeddingSettings {
+	provider: 'openai' | 'dashscope' | 'ollama';
+	model: string;
+	dimension: number;
+	endpoint: string;
+	apiKey: string;
+}
+
+interface ExternalLibrarySettings {
+	enabled: boolean;
+	rawFolderPath: string;
+	embedding: EmbeddingSettings;
+	qdrant: QdrantSettings;
+	ragAnything: RAGAnythingSettings;
+}
+
 interface SmartRAGSettings {
 	chatLLM: LLMConfig;
-	lightRAGLLM: LLMConfig;
-	semanticChunkLLM: LLMConfig;
-	lightRAGEmbedding: {
-		baseUrl: string;
-		modelName: string;
-		dimension?: number;
-	};
-	lightRAGWorkingDir: string;
-	lightRAGServerUrl: string;  // LightRAG server URL (local or remote via Tailscale)
+	lightRAGServerUrl: string;
+	externalLibrary: ExternalLibrarySettings;
 }
 
 const DEFAULT_SETTINGS: SmartRAGSettings = {
@@ -53,39 +70,53 @@ const DEFAULT_SETTINGS: SmartRAGSettings = {
 		baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
 		apiKey: 'sk-sp-5dd6c4a0e3a545e0920e147687ca685a',
 		modelName: 'glm-5',
-		maxTokens: 2048,
+		maxTokens: 4096,
 		temperature: 0.7
 	},
-	lightRAGLLM: {
-		baseUrl: 'https://api.longcat.chat/openai/v1',
-		apiKey: 'ak_2pT3ly6Ix7iM56T7f37eq1It5fR2G',
-		modelName: 'LongCat-Flash-Lite'
-	},
-	semanticChunkLLM: {
-		baseUrl: 'https://coding.dashscope.aliyuncs.com/v1',
-		apiKey: 'sk-sp-5dd6c4a0e3a545e0920e147687ca685a',
-		modelName: 'glm-5',
-		maxTokens: 1024,
-		temperature: 0.1
-	},
-	lightRAGEmbedding: {
-		baseUrl: 'http://127.0.0.1:1234',
-		modelName: 'text-embedding-bge-m3',
-		dimension: 1024
-	},
-	lightRAGWorkingDir: '~/.openclaw/lightrag-data',
-	lightRAGServerUrl: 'http://127.0.0.1:9621'  // Default: local LightRAG server
+	lightRAGServerUrl: 'http://127.0.0.1:9621',
+	externalLibrary: {
+		enabled: true,
+		rawFolderPath: '',
+		embedding: {
+			provider: 'openai',
+			model: 'text-embedding-3-small',
+			dimension: 1536,
+			endpoint: 'https://api.openai.com/v1',
+			apiKey: ''
+		},
+		qdrant: {
+			enabled: true,
+			httpPort: 6333,
+			dataDir: PlatformManager.getDefaultQdrantDataDir(),
+			autoStart: true
+		},
+		ragAnything: {
+			enabled: true,
+			httpPort: 8000,
+			autoStart: true
+		}
+	}
 };
 
 export default class SmartRAGPlugin extends Plugin {
 	settings!: SmartRAGSettings;
 	statusBarItem!: HTMLElement;
 	statusCheckInterval!: number;
-	private databaseManager: DatabaseManager | null = null;
-	private databaseService: DatabaseService | null = null;
-	private settingsChangeListeners: Set<() => void> = new Set();
-	private embeddingService: EmbeddingService | null = null;
-	private chunkingService: ChunkingService | null = null;
+
+	// v1.0.0 new components
+	qdrantManager: QdrantManager | null = null;
+	qdrantClient: QdrantClientWrapper | null = null;
+	ragAnythingManager: RAGAnythingManager | null = null;
+	indexingEngine: IndexingEngine | null = null;
+	queryEngine: QueryEngine | null = null;
+
+	// Indexing state
+	isIndexing = false;
+	indexingProgress: IndexingProgress | null = null;
+	indexingCancelled = false;
+
+	// Stats
+	collectionStats: Record<string, number> = {};
 
 	async onload() {
 		await this.loadSettings();
@@ -101,34 +132,26 @@ export default class SmartRAGPlugin extends Plugin {
 			this.openChatView();
 		});
 
-		// Register command: Open chat panel
+		// Register commands
 		this.addCommand({
 			id: 'open-chat-panel',
 			name: 'Open Chat Panel',
-			callback: () => {
-				this.openChatView();
-			}
+			callback: () => this.openChatView()
 		});
 
-		// Register command: Index current file
-		this.addCommand({
-			id: 'index-current-file',
-			name: 'Index Current File',
-			callback: async () => {
-				await this.indexCurrentFile();
-			}
-		});
-
-		// Register command: Index entire vault
 		this.addCommand({
 			id: 'index-vault',
 			name: 'Index Entire Vault',
-			callback: async () => {
-				await this.indexVault();
-			}
+			callback: () => this.indexVault()
 		});
 
-		// Add status bar item for LightRAG Server status
+		this.addCommand({
+			id: 'index-raw-folder',
+			name: 'Index Raw Folder',
+			callback: () => this.indexRawFolder()
+		});
+
+		// Add status bar item
 		this.statusBarItem = this.addStatusBarItem();
 		this.statusBarItem.setText('RAG: Checking...');
 		this.updateStatusBar();
@@ -138,17 +161,84 @@ export default class SmartRAGPlugin extends Plugin {
 			this.updateStatusBar();
 		}, 5000);
 
-		// Initialize local vector database (PGlite 0.4.3 + vector extension)
-		// ESM compatibility handled by import-meta-url-shim.js
+		// Initialize v1.0.0 components
 		try {
-			this.databaseManager = await DatabaseManager.create(this.app);
-			console.log('Smart RAG database initialized (PGlite 0.4.3 + vector)');
+			await this.initializeV1();
+			console.log('Smart RAG v1.0.0 initialized successfully');
 		} catch (error) {
-			console.error('Failed to initialize database:', error);
-			// Plugin can still work with LightRAG server if local DB fails
+			console.error('Failed to initialize Smart RAG v1.0.0:', error);
+			new Notice(`Smart RAG init failed: ${error}`);
 		}
 
-		console.log('Smart RAG plugin loaded - v0.3.5-index');
+		console.log('Smart RAG plugin loaded - v1.0.0');
+	}
+
+	/**
+	 * Initialize v1.0.0 components (Qdrant, RAG-Anything, Indexing, Query)
+	 */
+	async initializeV1(): Promise<void> {
+		const extLib = this.settings.externalLibrary;
+
+		// Initialize Qdrant
+		this.qdrantManager = new QdrantManager(extLib.qdrant);
+		this.qdrantClient = new QdrantClientWrapper(`http://127.0.0.1:${extLib.qdrant.httpPort}`);
+
+		// Initialize RAG-Anything
+		this.ragAnythingManager = new RAGAnythingManager(extLib.ragAnything);
+
+		// Auto-start services if configured
+		if (extLib.enabled && extLib.qdrant.autoStart) {
+			await this.startExternalServices();
+		}
+
+		// Initialize Qdrant client and collections
+		if (await this.qdrantManager?.isRunning()) {
+			await this.qdrantClient?.initialize();
+			await this.qdrantClient?.createCollections(extLib.embedding.dimension);
+			this.collectionStats = await this.qdrantClient?.getAllStats() || {};
+		}
+
+		// Initialize Indexing Engine
+		this.indexingEngine = new IndexingEngine(this.app, this.qdrantClient!, {
+			embeddingModel: extLib.embedding.model,
+			embeddingDimension: extLib.embedding.dimension,
+			embeddingEndpoint: extLib.embedding.endpoint,
+			embeddingApiKey: extLib.embedding.apiKey,
+			rawFolderPath: extLib.rawFolderPath || undefined,
+			ragAnythingUrl: `http://127.0.0.1:${extLib.ragAnything.httpPort}`,
+		});
+
+		// Initialize Query Engine
+		const llmProvider = {
+			generate: async (prompt: string) => {
+				const response = await fetch(`${this.settings.chatLLM.baseUrl}/chat/completions`, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${this.settings.chatLLM.apiKey}`,
+					},
+					body: JSON.stringify({
+						model: this.settings.chatLLM.modelName,
+						messages: [{ role: 'user', content: prompt }],
+						max_tokens: this.settings.chatLLM.maxTokens || 4096,
+						temperature: this.settings.chatLLM.temperature || 0.7,
+					}),
+				});
+
+				if (!response.ok) {
+					throw new Error(`LLM API error: ${response.status}`);
+				}
+
+				const data = await response.json();
+				return data.choices[0]?.message?.content || 'No response generated.';
+			}
+		};
+
+		this.queryEngine = new QueryEngine(this.qdrantClient!, llmProvider, {
+			endpoint: extLib.embedding.endpoint,
+			model: extLib.embedding.model,
+			apiKey: extLib.embedding.apiKey,
+		});
 	}
 
 	onunload() {
@@ -156,98 +246,128 @@ export default class SmartRAGPlugin extends Plugin {
 		if (this.statusCheckInterval) {
 			window.clearInterval(this.statusCheckInterval);
 		}
-		// Close local vector database
-		if (this.databaseManager) {
-			this.databaseManager.cleanup();
-		}
-		// Close database service (legacy)
-		if (this.databaseService) {
-			this.databaseService.close();
-		}
-		console.log('Smart RAG plugin unloaded');
+
+		// Stop external services
+		this.stopExternalServices();
+
+		console.log('Smart RAG v1.0.0 unloaded');
 	}
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
 
-	/**
-	 * Save settings (with optional new values)
-	 */
 	async saveSettings(newSettings?: SmartRAGSettings) {
 		if (newSettings) {
 			this.settings = newSettings;
 		}
 		await this.saveData(this.settings);
-		// Notify listeners
-		this.settingsChangeListeners.forEach(listener => listener());
 	}
 
 	/**
-	 * Add a settings change listener
+	 * Start external services (Qdrant + RAG-Anything)
 	 */
-	addSettingsChangeListener(listener: () => void): () => void {
-		this.settingsChangeListeners.add(listener);
-		return () => {
-			this.settingsChangeListeners.delete(listener);
-		};
-	}
+	async startExternalServices(): Promise<void> {
+		const extLib = this.settings.externalLibrary;
 
-	/**
-	 * Get database service instance
-	 */
-	getDatabaseManager(): DatabaseManager | null {
-		return this.databaseManager;
-	}
-
-	/**
-	 * Get database service instance (for embedding storage)
-	 * Lazy initialization - only creates database when needed
-	 */
-	async getDatabaseService(): Promise<DatabaseService | null> {
-		if (!this.databaseService) {
-			this.databaseService = new DatabaseService();
-			try {
-				await this.databaseService.initialize();
-				console.log('Database service initialized on demand');
-			} catch (error) {
-				console.error('Failed to initialize database service:', error);
-				this.databaseService = null;
-				return null;
+		// Start Qdrant
+		if (extLib.qdrant.enabled) {
+			const qdrantStarted = await this.qdrantManager?.start();
+			if (qdrantStarted) {
+				await this.qdrantClient?.initialize();
+				await this.qdrantClient?.createCollections(extLib.embedding.dimension);
 			}
 		}
-		return this.databaseService;
+
+		// Start RAG-Anything
+		if (extLib.ragAnything.enabled) {
+			await this.ragAnythingManager?.start();
+		}
+
+		// Update stats
+		this.collectionStats = await this.qdrantClient?.getAllStats() || {};
 	}
 
 	/**
-	 * Get RAG engine instance
+	 * Stop external services
 	 */
-	getRAGEngine(): RAGEngine | null {
-		// Return a simple object that implements the RAG interface
-		// This will be wrapped in a Promise by ChatView.tsx
-		return {
-			serverUrl: this.settings.lightRAGServerUrl,
-			settings: {
-				embeddingModelId: 'default',
-				enableAutoStartServer: false,
-				ragOptions: {
-					thresholdTokens: 1000,
-				},
-			} as any,
-			app: this.app,
-		} as any;
+	async stopExternalServices(): Promise<void> {
+		this.qdrantManager?.stop();
+		this.ragAnythingManager?.stop();
+	}
+
+	/**
+	 * Index vault
+	 */
+	async indexVault(): Promise<void> {
+		if (this.isIndexing) {
+			new Notice('Indexing already in progress');
+			return;
+		}
+
+		this.isIndexing = true;
+		this.indexingCancelled = false;
+
+		this.indexingEngine?.onProgress((progress) => {
+			this.indexingProgress = progress;
+			this.updateStatusBar();
+		});
+
+		try {
+			await this.indexingEngine?.indexVault();
+			new Notice('Vault indexing complete!');
+		} catch (error: any) {
+			new Notice(`Indexing failed: ${error.message}`);
+		} finally {
+			this.isIndexing = false;
+			this.indexingProgress = null;
+			this.updateStatusBar();
+			this.collectionStats = await this.qdrantClient?.getAllStats() || {};
+		}
+	}
+
+	/**
+	 * Index raw folder
+	 */
+	async indexRawFolder(): Promise<void> {
+		if (this.isIndexing) {
+			new Notice('Indexing already in progress');
+			return;
+		}
+
+		if (!this.settings.externalLibrary.rawFolderPath) {
+			new Notice('Please configure raw folder path in settings');
+			return;
+		}
+
+		this.isIndexing = true;
+		this.indexingCancelled = false;
+
+		this.indexingEngine?.onProgress((progress) => {
+			this.indexingProgress = progress;
+			this.updateStatusBar();
+		});
+
+		try {
+			await this.indexingEngine?.indexRawFolder();
+			new Notice('Raw folder indexing complete!');
+		} catch (error: any) {
+			new Notice(`Indexing failed: ${error.message}`);
+		} finally {
+			this.isIndexing = false;
+			this.indexingProgress = null;
+			this.updateStatusBar();
+			this.collectionStats = await this.qdrantClient?.getAllStats() || {};
+		}
 	}
 
 	async openChatView() {
-		// Check if view already exists
 		const existing = this.app.workspace.getLeavesOfType(CHAT_VIEW_TYPE);
 		if (existing.length > 0) {
-			// Focus existing view
 			this.app.workspace.revealLeaf(existing[0]);
 			return;
 		}
 
-		// Create new view in right sidebar
 		const leaf = this.app.workspace.getRightLeaf(false);
 		if (leaf) {
 			await leaf.setViewState({
@@ -259,234 +379,58 @@ export default class SmartRAGPlugin extends Plugin {
 	}
 
 	async updateStatusBar() {
-		const status = await this.checkLightRAGServerStatus();
-		switch (status.status) {
-			case 'running':
-				this.statusBarItem.setText('RAG: ● Running');
-				this.statusBarItem.style.color = '#4CAF50';
-				break;
-			case 'busy':
-				this.statusBarItem.setText('RAG: ● Busy');
-				this.statusBarItem.style.color = '#FFC107';
-				break;
-			case 'stopped':
-				this.statusBarItem.setText('RAG: ○ Stopped');
-				this.statusBarItem.style.color = '#F44336';
-				break;
+		const qdrantRunning = await this.qdrantManager?.isRunning();
+		const ragRunning = await this.ragAnythingManager?.isRunning();
+
+		if (this.isIndexing && this.indexingProgress) {
+			this.statusBarItem.setText(`RAG: ${this.indexingProgress.message}`);
+			this.statusBarItem.style.color = '#FFC107';
+		} else if (qdrantRunning && ragRunning) {
+			this.statusBarItem.setText('RAG: ● Ready');
+			this.statusBarItem.style.color = '#4CAF50';
+		} else if (qdrantRunning) {
+			this.statusBarItem.setText('RAG: ⚠ Qdrant only');
+			this.statusBarItem.style.color = '#FFC107';
+		} else {
+			this.statusBarItem.setText('RAG: ○ Stopped');
+			this.statusBarItem.style.color = '#F44336';
 		}
 	}
 
-	async checkLightRAGServerStatus(): Promise<{status: 'running' | 'busy' | 'stopped'}> {
-		try {
-			// 先检查进程是否存在
-			const { stdout } = await execAsync('ps aux | grep -v grep | grep lightrag-server');
-			if (!stdout.trim()) {
-				return { status: 'stopped' };
-			}
-
-			// 进程存在，检查健康状态
-			try {
-				const response = await fetch(`${this.settings.lightRAGServerUrl}/health`);
-				if (response.ok) {
-					const data = await response.json();
-					// 如果 health API 返回 busy 状态
-					if (data.status === 'busy' || data.processing) {
-						return { status: 'busy' };
-					}
-					return { status: 'running' };
-				}
-				return { status: 'stopped' };
-			} catch (fetchError) {
-				// 进程存在但无法访问 API，可能正在启动中
-				return { status: 'busy' };
-			}
-		} catch (error) {
-			// 进程不存在
-			return { status: 'stopped' };
+	/**
+	 * Query the RAG engine
+	 */
+	async query(question: string): Promise<QueryResult | null> {
+		if (!this.queryEngine) {
+			new Notice('Query engine not initialized');
+			return null;
 		}
-	}
 
-	async writeLightRAGConfig(): Promise<void> {
-		// 配置文件路径必须与启动脚本一致
-		const configPath = '/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/lightrag-config.json';
-		
-		// 从用户设置生成配置
-		const config = {
-			server: {
-				host: '127.0.0.1',
-				port: 9621,
-				working_dir: this.settings.lightRAGWorkingDir.replace('~', process.env.HOME || '')
-			},
-			options: {
-				log_level: 'INFO',
-				max_async: 4,
-				timeout: 1200,
-				chunking_strategy: 'semantic'
-			},
-			llm: {
-				base_url: this.settings.lightRAGLLM.baseUrl,
-				api_key_env: this.settings.lightRAGLLM.apiKey, // 启动脚本读取 api_key_env
-				model: this.settings.lightRAGLLM.modelName,
-				provider: 'custom',
-				binding: 'openai',
-				temperature: 0.1,
-				max_tokens: this.settings.lightRAGLLM.maxTokens || 2048
-			},
-			embedding: {
-				base_url: this.settings.lightRAGEmbedding.baseUrl,
-				api_key_env: 'lm-studio', // Embedding 通常不需要 API key
-				model: this.settings.lightRAGEmbedding.modelName,
-				provider: 'custom',
-				binding: 'openai',
-				dimension: this.settings.lightRAGEmbedding.dimension || 1024
-			}
-		};
-
-		// 写入配置文件
-		// @ts-ignore
-		const fs = window.require('fs');
-		fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-		console.log('LightRAG config written:', configPath);
-		console.log('Config:', JSON.stringify(config, null, 2));
-	}
-
-	async startLightRAGServer(): Promise<void> {
-		// 先写入配置
-		await this.writeLightRAGConfig();
-		
-		// LightRAG 启动脚本路径
-		const startScript = '/Users/frankzhang/.openclaw/workspace/tools/lightrag-manager/start-lightrag.sh';
-		
 		try {
-			// 执行启动脚本
-			const { stdout, stderr } = await execAsync(`bash "${startScript}"`);
-			console.log('LightRAG Server started:', stdout);
-			if (stderr) {
-				console.warn('LightRAG Server stderr:', stderr);
-			}
+			return await this.queryEngine.query(question);
 		} catch (error: any) {
-			console.error('Failed to start LightRAG Server:', error);
-			throw error;
-		}
-	}
-
-	/**
-	 * Index current file
-	 */
-	async indexCurrentFile(): Promise<void> {
-		const activeFile = this.app.workspace.getActiveFile();
-		if (!activeFile) {
-			new Notice('No active file to index');
-			return;
-		}
-
-		try {
-			new Notice(`Indexing ${activeFile.name}...`);
-
-			// Read file content
-			const content = await this.app.vault.read(activeFile);
-
-			// Send to LightRAG Server
-			const response = await fetch(`${this.settings.lightRAGServerUrl}/documents/texts`, {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-				},
-				body: JSON.stringify({
-					texts: [content],
-				}),
-			});
-
-			if (!response.ok) {
-				throw new Error(`LightRAG server error: ${response.status}`);
-			}
-
-			const result = await response.json();
-			new Notice(`✅ Indexed ${activeFile.name}`);
-			console.log('Index result:', result);
-		} catch (error) {
-			console.error('Failed to index file:', error);
-			new Notice(`❌ Failed to index: ${error instanceof Error ? error.message : String(error)}`);
-			}
-	}
-
-	/**
-	 * Index entire vault using LightRAG Server
-	 */
-	async indexVault(): Promise<void> {
-		try {
-			new Notice('Indexing entire vault... This may take a while.');
-
-			const files = this.app.vault.getMarkdownFiles();
-			let successCount = 0;
-			let failCount = 0;
-
-			for (const file of files) {
-				try {
-					const content = await this.app.vault.read(file);
-
-					// Send to LightRAG Server
-					const response = await fetch(`${this.settings.lightRAGServerUrl}/documents/texts`, {
-						method: 'POST',
-						headers: {
-							'Content-Type': 'application/json',
-						},
-						body: JSON.stringify({
-							texts: [content],
-						}),
-					});
-
-					if (response.ok) {
-						successCount++;
-					} else {
-						failCount++;
-						console.warn(`Failed to index ${file.path}: ${response.status}`);
-					}
-				} catch (error) {
-					failCount++;
-					console.error(`Error indexing ${file.path}:`, error);
-				}
-			}
-
-			new Notice(`✅ Indexed ${successCount} files, ${failCount} failed`);
-		} catch (error) {
-			console.error('Failed to index vault:', error);
-			new Notice(`❌ Failed to index vault: ${error instanceof Error ? error.message : String(error)}`);
-			}
-	}
-
-	/**
-	 * Get database statistics from LightRAG Server
-	 */
-	async getDatabaseStats(): Promise<{ documentsCount: number; chunksCount: number } | null> {
-		try {
-			const response = await fetch(`${this.settings.lightRAGServerUrl}/health`);
-			if (!response.ok) {
-				return null;
-			}
-			const result = await response.json();
-			return {
-				documentsCount: result.documentCount || 0,
-				chunksCount: result.chunkCount || 0
-			};
-		} catch (error) {
-			console.error('Failed to get database stats:', error);
+			new Notice(`Query failed: ${error.message}`);
 			return null;
 		}
 	}
 
-	async stopLightRAGServer(): Promise<void> {
-		try {
-			// 停止 LightRAG 服务器进程
-			await execAsync('pkill -f lightrag-server');
-			console.log('LightRAG Server stopped');
-		} catch (error: any) {
-			// pkill 如果没有找到进程会返回错误，这是正常的
-			console.log('No LightRAG Server process found or already stopped');
-		}
+	/**
+	 * Get collection stats
+	 */
+	async getCollectionStats(): Promise<Record<string, number>> {
+		return await this.qdrantClient?.getAllStats() || {};
+	}
+
+	/**
+	 * Check if services are ready
+	 */
+	async isReady(): Promise<boolean> {
+		const qdrantRunning = await this.qdrantManager?.isRunning();
+		return !!qdrantRunning;
 	}
 }
 
+// Settings Tab
 class SmartRAGSettingTab extends PluginSettingTab {
 	plugin: SmartRAGPlugin;
 	currentTab: string = 'chat-llm';
@@ -497,17 +441,11 @@ class SmartRAGSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	/**
-	 * Show auto-save badge after input change
-		 * Auto-saves settings after 1 second of no changes
-		 */
 	showAutoSaveBadge(): void {
-		// Clear previous timeout
 		if (this.autoSaveTimeout) {
 			window.clearTimeout(this.autoSaveTimeout);
 		}
 
-		// Auto-save after 1 second
 		this.autoSaveTimeout = window.setTimeout(async () => {
 			await this.plugin.saveSettings();
 			new Notice('✓ Auto-saved', 2000);
@@ -516,69 +454,44 @@ class SmartRAGSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
-		const {containerEl} = this;
-
+		const { containerEl } = this;
 		containerEl.empty();
-		containerEl.createEl('h2', {text: 'Smart RAG Settings'});
+		containerEl.createEl('h2', { text: 'Smart RAG v1.0.0 Settings' });
 
-		// Create tab navigation
+		// Tab navigation
 		const tabContainer = containerEl.createDiv('smart-rag-tabs');
 		const tabs = [
 			{ id: 'chat-llm', label: 'Chat LLM' },
-			{ id: 'lightrag-llm', label: 'LightRAG LLM' },
-			{ id: 'chunk-llm', label: 'Semantic Chunk' },
-			{ id: 'embedding', label: 'LightRAG Embedding' }
+			{ id: 'external', label: 'External Library' },
 		];
 
-		const tabButtons: HTMLButtonElement[] = [];
 		tabs.forEach(tab => {
 			const button = tabContainer.createEl('button', {
 				text: tab.label,
-				cls: 'smart-rag-tab-button'
+				cls: `smart-rag-tab-button${this.currentTab === tab.id ? ' smart-rag-tab-active' : ''}`
 			});
 			button.onclick = () => {
 				this.currentTab = tab.id;
 				this.display();
 			};
-			if (this.currentTab === tab.id) {
-				button.addClass('smart-rag-tab-active');
-			}
-			tabButtons.push(button);
 		});
 
-		// Create content container
+		// Content container
 		const contentContainer = containerEl.createDiv('smart-rag-tab-content');
 
-		// Display current tab content
 		switch (this.currentTab) {
 			case 'chat-llm':
 				this.renderChatLLMSettings(contentContainer);
 				break;
-			case 'lightrag-llm':
-				this.renderLightRAGLLMSettings(contentContainer);
-				break;
-			case 'chunk-llm':
-				this.renderSemanticChunkSettings(contentContainer);
-				break;
-			case 'embedding':
-				this.renderEmbeddingSettings(containerEl); // Use containerEl instead of contentContainer for proper setting integration
+			case 'external':
+				this.renderExternalLibrarySettings(contentContainer);
 				break;
 		}
-
-		// Save button
-		new Setting(containerEl)
-			.addButton(btn => btn
-				.setButtonText('Save Settings')
-				.setCta()
-				.onClick(async () => {
-					await this.plugin.saveSettings();
-					new Notice('Settings saved!');
-				}));
 	}
 
 	renderChatLLMSettings(container: HTMLElement) {
-		container.createEl('h3', {text: 'Chat LLM Configuration'});
-		
+		container.createEl('h3', { text: 'Chat LLM Configuration' });
+
 		new Setting(container)
 			.setName('Base URL')
 			.setDesc('OpenAI-compatible API endpoint')
@@ -592,7 +505,7 @@ class SmartRAGSettingTab extends PluginSettingTab {
 
 		new Setting(container)
 			.setName('API Key')
-			.setDesc('Authentication key for the API')
+			.setDesc('Authentication key')
 			.addText(text => text
 				.setPlaceholder('sk-xxx')
 				.setValue(this.plugin.settings.chatLLM.apiKey)
@@ -611,420 +524,220 @@ class SmartRAGSettingTab extends PluginSettingTab {
 					this.plugin.settings.chatLLM.modelName = value;
 					this.showAutoSaveBadge();
 				}));
-
-		new Setting(container)
-			.setName('Max Tokens')
-			.setDesc('Maximum tokens for response')
-			.addText(text => text
-				.setPlaceholder('2048')
-				.setValue(String(this.plugin.settings.chatLLM.maxTokens || ''))
-				.onChange(async (value) => {
-					this.plugin.settings.chatLLM.maxTokens = value ? parseInt(value) : undefined;
-					this.showAutoSaveBadge();
-				}));
-
-		new Setting(container)
-			.setName('Temperature')
-			.setDesc('Response randomness (0.0-1.0)')
-			.addText(text => text
-				.setPlaceholder('0.7')
-				.setValue(String(this.plugin.settings.chatLLM.temperature || ''))
-				.onChange(async (value) => {
-					this.plugin.settings.chatLLM.temperature = value ? parseFloat(value) : undefined;
-					this.showAutoSaveBadge();
-				}));
-
-		// Test Connection button
-		new Setting(container)
-			.setName('Connection Test')
-			.setDesc('Test connection to Chat LLM API')
-			.addButton(btn => btn
-				.setButtonText('Test Connection')
-				.onClick(async () => {
-					btn.setButtonText('Testing...');
-					btn.setDisabled(true);
-					
-					const result = await connectionTester.testLLMConnection(
-						this.plugin.settings.chatLLM.baseUrl,
-						this.plugin.settings.chatLLM.apiKey,
-						this.plugin.settings.chatLLM.modelName
-					);
-					
-					btn.setButtonText('Test Connection');
-					btn.setDisabled(false);
-					
-					if (result.success) {
-						new Notice(`✅ ${result.message}\nModel: ${result.details?.model}\nResponse time: ${result.details?.responseTime}ms`, 5000);
-					} else {
-						new Notice(`❌ ${result.message}\nError: ${result.details?.error}`, 8000);
-					}
-				}));
 	}
 
-	renderLightRAGLLMSettings(container: HTMLElement) {
-		container.createEl('h3', {text: 'LightRAG LLM Configuration'});
-		
+	renderExternalLibrarySettings(container: HTMLElement) {
+		const extLib = this.plugin.settings.externalLibrary;
+
+		container.createEl('h3', { text: '📚 External Document Library' });
+
+		// Enable external library
 		new Setting(container)
-			.setName('Base URL')
-			.setDesc('OpenAI-compatible API endpoint for LightRAG internal processing')
-			.addText(text => text
-				.setPlaceholder('https://api.example.com/v1')
-				.setValue(this.plugin.settings.lightRAGLLM.baseUrl)
+			.setName('Enable External Library')
+			.setDesc('Index and search external documents')
+			.addToggle(toggle => toggle
+				.setValue(extLib.enabled)
 				.onChange(async (value) => {
-					this.plugin.settings.lightRAGLLM.baseUrl = value;
+					extLib.enabled = value;
 					this.showAutoSaveBadge();
 				}));
 
+		// Raw folder path
 		new Setting(container)
-			.setName('API Key')
-			.setDesc('Authentication key for the API')
+			.setName('Raw Folder Path')
+			.setDesc('Path to external documents')
 			.addText(text => text
-				.setPlaceholder('sk-xxx')
-				.setValue(this.plugin.settings.lightRAGLLM.apiKey)
+				.setPlaceholder('/path/to/documents')
+				.setValue(extLib.rawFolderPath)
 				.onChange(async (value) => {
-					this.plugin.settings.lightRAGLLM.apiKey = value;
+					extLib.rawFolderPath = value;
 					this.showAutoSaveBadge();
 				}));
 
-		new Setting(container)
-			.setName('Model Name')
-			.setDesc('Model identifier')
-			.addText(text => text
-				.setPlaceholder('model-name')
-				.setValue(this.plugin.settings.lightRAGLLM.modelName)
-				.onChange(async (value) => {
-					this.plugin.settings.lightRAGLLM.modelName = value;
-					this.showAutoSaveBadge();
-				}));
-
-		// Test Connection button
-		new Setting(container)
-			.setName('Connection Test')
-			.setDesc('Test connection to LightRAG LLM API')
-			.addButton(btn => btn
-				.setButtonText('Test Connection')
-				.onClick(async () => {
-					btn.setButtonText('Testing...');
-					btn.setDisabled(true);
-					
-					const result = await connectionTester.testLLMConnection(
-						this.plugin.settings.lightRAGLLM.baseUrl,
-						this.plugin.settings.lightRAGLLM.apiKey,
-						this.plugin.settings.lightRAGLLM.modelName
-					);
-					
-					btn.setButtonText('Test Connection');
-					btn.setDisabled(false);
-					
-					if (result.success) {
-						new Notice(`✅ ${result.message}\nModel: ${result.details?.model}\nResponse time: ${result.details?.responseTime}ms`, 5000);
-					} else {
-						new Notice(`❌ ${result.message}\nError: ${result.details?.error}`, 8000);
-					}
-				}));
-	}
-
-	renderSemanticChunkSettings(container: HTMLElement) {
-		container.createEl('h3', {text: 'Semantic Chunk LLM Configuration'});
-		
-		new Setting(container)
-			.setName('Base URL')
-			.setDesc('OpenAI-compatible API endpoint for semantic text chunking')
-			.addText(text => text
-				.setPlaceholder('https://api.example.com/v1')
-				.setValue(this.plugin.settings.semanticChunkLLM.baseUrl)
-				.onChange(async (value) => {
-					this.plugin.settings.semanticChunkLLM.baseUrl = value;
-					this.showAutoSaveBadge();
-				}));
-
-		new Setting(container)
-			.setName('API Key')
-			.setDesc('Authentication key for the API')
-			.addText(text => text
-				.setPlaceholder('sk-xxx')
-				.setValue(this.plugin.settings.semanticChunkLLM.apiKey)
-				.onChange(async (value) => {
-					this.plugin.settings.semanticChunkLLM.apiKey = value;
-					this.showAutoSaveBadge();
-				}));
-
-		new Setting(container)
-			.setName('Model Name')
-			.setDesc('Model identifier')
-			.addText(text => text
-				.setPlaceholder('model-name')
-				.setValue(this.plugin.settings.semanticChunkLLM.modelName)
-				.onChange(async (value) => {
-					this.plugin.settings.semanticChunkLLM.modelName = value;
-					this.showAutoSaveBadge();
-				}));
-
-		new Setting(container)
-			.setName('Max Tokens')
-			.setDesc('Maximum tokens for chunking analysis (1024 recommended)')
-			.addText(text => text
-				.setPlaceholder('1024')
-				.setValue(String(this.plugin.settings.semanticChunkLLM.maxTokens || ''))
-				.onChange(async (value) => {
-					this.plugin.settings.semanticChunkLLM.maxTokens = value ? parseInt(value) : undefined;
-					this.showAutoSaveBadge();
-				}));
-
-		new Setting(container)
-			.setName('Temperature')
-			.setDesc('Determinism for chunking (0.1-0.3 recommended for stable results)')
-			.addText(text => text
-				.setPlaceholder('0.1')
-				.setValue(String(this.plugin.settings.semanticChunkLLM.temperature || ''))
-				.onChange(async (value) => {
-					this.plugin.settings.semanticChunkLLM.temperature = value ? parseFloat(value) : undefined;
-					this.showAutoSaveBadge();
-				}));
-
-		// Test Connection button
-		new Setting(container)
-			.setName('Connection Test')
-			.setDesc('Test connection to Semantic Chunk LLM API')
-			.addButton(btn => btn
-				.setButtonText('Test Connection')
-				.onClick(async () => {
-					btn.setButtonText('Testing...');
-					btn.setDisabled(true);
-					
-					const result = await connectionTester.testLLMConnection(
-						this.plugin.settings.semanticChunkLLM.baseUrl,
-						this.plugin.settings.semanticChunkLLM.apiKey,
-						this.plugin.settings.semanticChunkLLM.modelName
-					);
-					
-					btn.setButtonText('Test Connection');
-					btn.setDisabled(false);
-					
-					if (result.success) {
-						new Notice(`✅ ${result.message}\nModel: ${result.details?.model}\nResponse time: ${result.details?.responseTime}ms`, 5000);
-					} else {
-						new Notice(`❌ ${result.message}\nError: ${result.details?.error}`, 8000);
-					}
-				}));
-	}
-
-	renderEmbeddingSettings(container: HTMLElement) {
-		container.createEl('h3', {text: 'LightRAG Embedding Configuration'});
-		
-		new Setting(container)
-			.setName('Base URL')
-			.setDesc('Embedding API endpoint (e.g., LM Studio)')
-			.addText(text => text
-				.setPlaceholder('http://127.0.0.1:1234')
-				.setValue(this.plugin.settings.lightRAGEmbedding.baseUrl)
-				.onChange(async (value) => {
-					this.plugin.settings.lightRAGEmbedding.baseUrl = value;
-					this.showAutoSaveBadge();
-				}));
-
-		new Setting(container)
-			.setName('Model Name')
-			.setDesc('Embedding model identifier')
-			.addText(text => text
-				.setPlaceholder('text-embedding-bge-m3')
-				.setValue(this.plugin.settings.lightRAGEmbedding.modelName)
-				.onChange(async (value) => {
-					this.plugin.settings.lightRAGEmbedding.modelName = value;
-					this.showAutoSaveBadge();
-				}));
-
-		new Setting(container)
-			.setName('Dimension')
-			.setDesc('Vector dimension (e.g., 1024 for BGE-M3)')
-			.addText(text => text
-				.setPlaceholder('1024')
-				.setValue(String(this.plugin.settings.lightRAGEmbedding.dimension || ''))
-				.onChange(async (value) => {
-					this.plugin.settings.lightRAGEmbedding.dimension = value ? parseInt(value) : undefined;
-					this.showAutoSaveBadge();
-				}));
-
-		// Test Embedding Connection button
-		new Setting(container)
-			.setName('Connection Test')
-			.setDesc('Test connection to Embedding API')
-			.addButton(btn => btn
-				.setButtonText('Test Connection')
-				.onClick(async () => {
-					btn.setButtonText('Testing...');
-					btn.setDisabled(true);
-					
-					const result = await connectionTester.testEmbeddingConnection(
-						this.plugin.settings.lightRAGEmbedding.baseUrl,
-						this.plugin.settings.lightRAGEmbedding.modelName
-					);
-					
-					btn.setButtonText('Test Connection');
-					btn.setDisabled(false);
-					
-					if (result.success) {
-						new Notice(`✅ ${result.message}\n${result.details?.error}\nResponse time: ${result.details?.responseTime}ms`, 5000);
-					} else {
-						new Notice(`❌ ${result.message}\nError: ${result.details?.error}`, 8000);
-					}
-				}));
-
-		// LightRAG Server Controls
+		// Embedding settings
 		container.createEl('hr');
-		container.createEl('h4', {text: '⚙️ LightRAG Server'});
+		container.createEl('h4', { text: 'Embedding Configuration' });
 
-		// LightRAG Server URL (for remote access via Tailscale)
 		new Setting(container)
-			.setName('Server URL')
-			.setDesc('LightRAG server address. Use local (http://127.0.0.1:9621) or remote via Tailscale (http://100.x.x.x:9621)')
+			.setName('Embedding Model')
+			.setDesc('Model for generating embeddings')
 			.addText(text => text
-				.setPlaceholder('http://127.0.0.1:9621')
-				.setValue(this.plugin.settings.lightRAGServerUrl)
+				.setPlaceholder('text-embedding-3-small')
+				.setValue(extLib.embedding.model)
 				.onChange(async (value) => {
-					this.plugin.settings.lightRAGServerUrl = value;
+					extLib.embedding.model = value;
 					this.showAutoSaveBadge();
 				}));
 
-		// Server status
-		const statusSetting = new Setting(container)
-			.setName('Server Status')
-			.setDesc('LightRAG server status (auto-refresh every 5 seconds)');
+		new Setting(container)
+			.setName('Embedding Dimension')
+			.setDesc('Vector dimension')
+			.addText(text => text
+				.setPlaceholder('1536')
+				.setValue(String(extLib.embedding.dimension))
+				.onChange(async (value) => {
+					extLib.embedding.dimension = parseInt(value) || 1536;
+					this.showAutoSaveBadge();
+				}));
 
-		const statusEl = statusSetting.settingEl.createDiv('smart-rag-server-status');
+		new Setting(container)
+			.setName('Embedding Endpoint')
+			.setDesc('URL for embedding API')
+			.addText(text => text
+				.setPlaceholder('https://api.openai.com/v1')
+				.setValue(extLib.embedding.endpoint)
+				.onChange(async (value) => {
+					extLib.embedding.endpoint = value;
+					this.showAutoSaveBadge();
+				}));
+
+		new Setting(container)
+			.setName('Embedding API Key')
+			.setDesc('API key for embedding service')
+			.addText(text => text
+				.setPlaceholder('sk-xxx')
+				.setValue(extLib.embedding.apiKey)
+				.onChange(async (value) => {
+					extLib.embedding.apiKey = value;
+					this.showAutoSaveBadge();
+				}));
+
+		// Qdrant settings
+		container.createEl('hr');
+		container.createEl('h4', { text: '⚙️ Qdrant Settings' });
+
+		new Setting(container)
+			.setName('Qdrant HTTP Port')
+			.setDesc('Port for Qdrant HTTP API')
+			.addText(text => text
+				.setPlaceholder('6333')
+				.setValue(String(extLib.qdrant.httpPort))
+				.onChange(async (value) => {
+					extLib.qdrant.httpPort = parseInt(value) || 6333;
+					this.showAutoSaveBadge();
+				}));
+
+		new Setting(container)
+			.setName('Qdrant Data Directory')
+			.setDesc('Directory for Qdrant storage')
+			.addText(text => text
+				.setPlaceholder('~/.openclaw/smart-rag/qdrant-data')
+				.setValue(extLib.qdrant.dataDir)
+				.onChange(async (value) => {
+					extLib.qdrant.dataDir = value;
+					this.showAutoSaveBadge();
+				}));
+
+		// RAG-Anything settings
+		container.createEl('hr');
+		container.createEl('h4', { text: '🔧 RAG-Anything Settings' });
+
+		new Setting(container)
+			.setName('RAG-Anything HTTP Port')
+			.setDesc('Port for RAG-Anything service')
+			.addText(text => text
+				.setPlaceholder('8000')
+				.setValue(String(extLib.ragAnything.httpPort))
+				.onChange(async (value) => {
+					extLib.ragAnything.httpPort = parseInt(value) || 8000;
+					this.showAutoSaveBadge();
+				}));
+
+		// Service status
+		container.createEl('hr');
+		container.createEl('h4', { text: '📊 Service Status' });
+
+		const statusEl = container.createDiv('smart-rag-service-status');
 		statusEl.setText('Checking...');
-		
-		// 更新状态显示的函数
+
 		const updateStatus = async () => {
-			const status = await this.plugin.checkLightRAGServerStatus();
-			switch (status.status) {
-				case 'running':
-					statusEl.setText('● Running');
-					statusEl.style.color = '#4CAF50';
-					break;
-				case 'busy':
-					statusEl.setText('● Busy (Processing)');
-					statusEl.style.color = '#FFC107';
-					break;
-				case 'stopped':
-					statusEl.setText('○ Stopped');
-					statusEl.style.color = '#F44336';
-					break;
-			}
+			const qdrantRunning = await this.plugin.qdrantManager?.isRunning();
+			const ragRunning = await this.plugin.ragAnythingManager?.isRunning();
+			const stats = this.plugin.collectionStats;
+
+			statusEl.innerHTML = `
+				<div style="margin-bottom: 8px;">
+					<strong>Qdrant:</strong> <span style="color: ${qdrantRunning ? '#4CAF50' : '#F44336'}">
+						${qdrantRunning ? '● Running' : '○ Stopped'}
+					span>
+				</div>
+				<div style="margin-bottom: 8px;">
+					<strong>RAG-Anything:</strong> <span style="color: ${ragRunning ? '#4CAF50' : '#F44336'}">
+						${ragRunning ? '● Running' : '○ Stopped'}
+					span>
+				</div>
+				<div style="margin-bottom: 8px;">
+					<strong>Index Stats:</strong>
+					<ul style="margin: 4px 0; padding-left: 20px;">
+						<li>Vault Notes: ${stats['vault_notes'] || 0}</li>
+						<li>Raw Documents: ${stats['raw_documents'] || 0}</li>
+						<li>Images: ${stats['images'] || 0}</li>
+					ul>
+				</div>
+			`;
 		};
 
-		// 初始检查
 		updateStatus();
-		
-		// 定时刷新（每5秒）- 使用 window.setInterval 而不是 this.register
-		const statusInterval = window.setInterval(updateStatus, 5000);
+		setInterval(updateStatus, 5000);
 
-		// Start/Stop buttons using Obsidian Setting API
+		// Service controls
 		new Setting(container)
-			.setName('Server Controls')
-			.setDesc('Start or stop the LightRAG server')
+			.setName('Service Controls')
+			.setDesc('Start or stop services')
 			.addButton(btn => btn
-				.setButtonText('Start Server')
+				.setButtonText('Start Services')
 				.setCta()
 				.onClick(async () => {
 					try {
-						await this.plugin.startLightRAGServer();
-						new Notice('LightRAG server started!');
+						await this.plugin.startExternalServices();
+						new Notice('Services started!');
 						updateStatus();
 					} catch (error: any) {
-						new Notice(`Failed to start server: ${error.message || error}`);
+						new Notice(`Failed: ${error.message}`);
 					}
 				}))
 			.addButton(btn => btn
-				.setButtonText('Stop Server')
+				.setButtonText('Stop Services')
 				.setWarning()
 				.onClick(async () => {
-					try {
-						await this.plugin.stopLightRAGServer();
-						new Notice('LightRAG server stopped!');
-						updateStatus();
-					} catch (error: any) {
-						new Notice(`Failed to stop server: ${error.message || error}`);
-					}
+					await this.plugin.stopExternalServices();
+					new Notice('Services stopped!');
+					updateStatus();
 				}));
 
-		// Working Directory
-		new Setting(container)
-			.setName('LightRAG Working Directory')
-			.setDesc('Shared LightRAG data directory (shared with Neural Composer)')
-			.addText(text => text
-				.setPlaceholder('~/.openclaw/lightrag-data')
-				.setValue(this.plugin.settings.lightRAGWorkingDir)
-				.onChange(async (value) => {
-					this.plugin.settings.lightRAGWorkingDir = value;
-				}));
-
-		// Local Vector Indexing Section
+		// Indexing controls
 		container.createEl('hr');
-		container.createEl('h4', {text: '📊 Local Vector Indexing'});
+		container.createEl('h4', { text: '📝 Indexing Controls' });
 
-		// Database Statistics
-		const statsSetting = new Setting(container)
-			.setName('Database Statistics')
-			.setDesc('Number of indexed documents and chunks');
+		// Progress
+		if (this.plugin.isIndexing && this.plugin.indexingProgress) {
+			const p = this.plugin.indexingProgress;
+			container.createEl('p', { text: p.message });
+			container.createEl('p', { text: `Current: ${p.currentFile}` });
+		}
 
-		const statsEl = statsSetting.settingEl.createDiv('smart-rag-db-stats');
-		statsEl.setText('Loading...');
-
-		// Update statistics
-		const updateStats = async () => {
-			const stats = await this.plugin.getDatabaseStats();
-			if (stats) {
-				statsEl.setText(`${stats.documentsCount} documents / ${stats.chunksCount} chunks`);
-			} else {
-				statsEl.setText('Database not initialized');
-			}
-		};
-		updateStats();
-
-		// Index Current File button
 		new Setting(container)
-			.setName('Index Current File')
-			.setDesc('Index the currently open file (uses remote Embedding API)')
+			.setName('Index Vault')
+			.setDesc('Index all Markdown files in vault')
 			.addButton(btn => btn
-				.setButtonText('Index Current File')
+				.setButtonText('Index Vault')
 				.setCta()
+				.setDisabled(this.plugin.isIndexing)
 				.onClick(async () => {
-					await this.plugin.indexCurrentFile();
-					updateStats();
+					await this.plugin.indexVault();
+					updateStatus();
 				}));
 
-		// Index Entire Vault button
 		new Setting(container)
-			.setName('Index Entire Vault')
-			.setDesc('Index all Markdown files in the vault (may take a long time)')
+			.setName('Index Raw Folder')
+			.setDesc('Index external documents')
 			.addButton(btn => btn
-				.setButtonText('Index Entire Vault')
-				.setWarning()
+				.setButtonText('Index Raw Folder')
+				.setCta()
+				.setDisabled(this.plugin.isIndexing)
 				.onClick(async () => {
-					if (confirm('Indexing all files may take a long time. Continue?')) {
-						await this.plugin.indexVault();
-						updateStats();
-					}
-				}));
-
-		// Clear Database button
-		new Setting(container)
-			.setName('Clear Local Database')
-			.setDesc('Delete all indexed documents and chunks')
-			.addButton(btn => btn
-				.setButtonText('Clear Database')
-				.onClick(async () => {
-					if (confirm('Are you sure you want to clear the database? This cannot be undone.')) {
-						const db = await this.plugin.getDatabaseService();
-						if (db) {
-							await db.clearDatabase();
-							new Notice('Database cleared');
-							updateStats();
-						} else {
-							new Notice('Database not initialized. Index some files first.');
-						}
-					}
+					await this.plugin.indexRawFolder();
+					updateStatus();
 				}));
 	}
 }
