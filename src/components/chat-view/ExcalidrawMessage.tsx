@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { loadImage, ZoomIn, ZoomOut, Download, FileText } from 'lucide-react';
+import { ZoomIn, ZoomOut, Download, FileText } from 'lucide-react';
 import { ExcalidrawGenerationResult } from '../../services/excalidrawGenerator';
 import { ExcalidrawRenderer } from '../../services/excalidrawRenderer';
 import { useApp } from '../../contexts/app-context';

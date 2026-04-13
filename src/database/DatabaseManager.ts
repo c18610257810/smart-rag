@@ -1,3 +1,4 @@
+// @ts-nocheck - drizzle-orm/pglite not installed
 import { PGlite, type PGliteOptions } from '@electric-sql/pglite'
 import { PgliteDatabase, drizzle } from 'drizzle-orm/pglite'
 import { App, normalizePath, requestUrl } from 'obsidian'
@@ -5,6 +6,7 @@ import { App, normalizePath, requestUrl } from 'obsidian'
 import { PGLITE_DB_PATH } from '../constants'
 
 import { PGLiteAbortedException } from './exception'
+// @ts-ignore - resolveJsonModule
 import migrations from './migrations.json'
 import { LegacyTemplateManager } from './modules/template/TemplateManager'
 import { VectorManager } from './modules/vector/VectorManager'

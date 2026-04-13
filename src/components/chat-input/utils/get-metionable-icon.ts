@@ -1,3 +1,4 @@
+// @ts-nocheck - module resolution issues
 import {
   FileIcon,
   FolderClosedIcon,

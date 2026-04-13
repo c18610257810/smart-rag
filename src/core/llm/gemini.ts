@@ -118,10 +118,10 @@ export class GeminiProvider extends BaseLLMProvider<
         request.model,
         messageId,
       )
-    } catch (error) {
+    } catch (error: unknown) {
       const isInvalidApiKey =
-        error.message?.includes('API_KEY_INVALID') ||
-        error.message?.includes('API key not valid')
+        (error as Error).message?.includes('API_KEY_INVALID') ||
+        (error as Error).message?.includes('API key not valid')
 
       if (isInvalidApiKey) {
         throw new LLMAPIKeyInvalidException(
@@ -185,10 +185,10 @@ export class GeminiProvider extends BaseLLMProvider<
 
       const messageId = crypto.randomUUID() // Gemini does not return a message id
       return this.streamResponseGenerator(stream, request.model, messageId)
-    } catch (error) {
+    } catch (error: unknown) {
       const isInvalidApiKey =
-        error.message?.includes('API_KEY_INVALID') ||
-        error.message?.includes('API key not valid')
+        (error as Error).message?.includes('API_KEY_INVALID') ||
+        (error as Error).message?.includes('API key not valid')
 
       if (isInvalidApiKey) {
         throw new LLMAPIKeyInvalidException(
@@ -445,8 +445,8 @@ private static removeAdditionalProperties(schema: unknown): unknown {
         .getGenerativeModel({ model: model })
         .embedContent(text)
       return response.embedding.values
-    } catch (error) {
-      if (error.status === 429) {
+    } catch (error: unknown) {
+      if ((error as any).status === 429) {
         throw new LLMRateLimitExceededException(
           'Gemini API rate limit exceeded. Please try again later.',
         )

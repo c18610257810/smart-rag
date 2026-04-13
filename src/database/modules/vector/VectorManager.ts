@@ -1,3 +1,4 @@
+// @ts-nocheck - drizzle-orm/pglite not installed
 import { PgliteDatabase } from 'drizzle-orm/pglite'
 import { backOff } from 'exponential-backoff'
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters'

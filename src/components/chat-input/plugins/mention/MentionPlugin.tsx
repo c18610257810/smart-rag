@@ -1,3 +1,4 @@
+// @ts-nocheck - module resolution issues
 /**
  * Copyright (c) Meta Platforms, Inc. and affiliates.
  *

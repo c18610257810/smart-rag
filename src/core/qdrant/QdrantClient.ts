@@ -5,6 +5,7 @@
  */
 
 import { QdrantClient, Schemas } from "@qdrant/js-client-rest";
+import { requestUrl } from "obsidian";
 import { COLLECTIONS, CollectionName, getCollectionSchema, VaultNotePayload, RawDocumentPayload, ImagePayload } from "./collections";
 
 export interface SearchResult {
@@ -30,6 +31,13 @@ export class QdrantClientWrapper {
       url: this.baseUrl,
     });
     console.log(`[Smart RAG] Qdrant client initialized: ${this.baseUrl}`);
+  }
+
+  /**
+   * Check if client is initialized
+   */
+  isInitialized(): boolean {
+    return this.client !== null;
   }
 
   /**
@@ -93,14 +101,14 @@ export class QdrantClientWrapper {
     filter?: Schemas["Filter"]
   ): Promise<SearchResult[]> {
     const client = this.getClient();
-    const results = await client.queryPoints(collection, {
-      query: vector,
+    const results = await client.search(collection, {
+      vector,
       limit,
       filter,
       with_payload: true,
     });
 
-    return results.map((r) => ({
+    return results.map((r: any) => ({
       id: r.id as string,
       score: r.score ?? 0,
       payload: r.payload as Record<string, unknown>,
@@ -177,6 +185,21 @@ export class QdrantClientWrapper {
     const client = this.getClient();
     const result = await client.count(collection, { filter });
     return result.count;
+  }
+
+  /**
+   * Get list of collection names (uses requestUrl to avoid Electron CSP issues)
+   */
+  async getCollections(): Promise<string[]> {
+    const response = await requestUrl({
+      url: `${this.baseUrl}/collections`,
+      throw: false,
+    });
+    if (response.status >= 200 && response.status < 300) {
+      const data = typeof response.json === 'object' ? response.json : JSON.parse(response.text);
+      return data.result?.collections?.map((c: any) => c.name) || [];
+    }
+    return [];
   }
 
   /**

@@ -1,22 +1,15 @@
-import { App } from 'obsidian'
+import { App, Modal, Notice } from 'obsidian'
 
-import { ReactModal } from '../common/ReactModal'
-import { TemplateSection } from '../../components/settings/sections/TemplateSection'
-
-type TemplateSectionProps = {
-  app: App
-}
-
-export class TemplateSectionModal extends ReactModal<TemplateSectionProps> {
+/**
+ * Stub: Template settings not supported in Smart RAG mode.
+ */
+export class TemplateSectionModal extends Modal {
   constructor(app: App) {
-    super({
-      app: app,
-      Component: TemplateSection,
-      props: {
-        app,
-      },
-    })
-    // Fix: Use setCssProps instead of direct style manipulation
-    this.modalEl.setCssProps({ width: '720px' })
+    super(app)
+  }
+
+  onOpen(): void {
+    new Notice('Template settings require Neural Composer configuration.')
+    this.close()
   }
 }

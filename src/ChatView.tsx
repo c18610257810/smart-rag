@@ -29,7 +29,7 @@ export const PLUGIN_NAME = "Smart RAG";
  */
 export class ChatView extends ItemView {
 	private root: Root | null = null
-	private chatRef: React.RefObject<ChatRef> = React.createRef()
+	private chatRef: React.RefObject<ChatRef | null> = React.createRef()
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -84,7 +84,7 @@ export class ChatView extends ItemView {
 				this.app,
 				currentAdaptedSettings,
 				null as any,  // VectorManager not needed for LightRAG
-				this.plugin.settings.lightRAGServerUrl
+				this.plugin.settings.lightRAG.serverUrl
 			)
 		}
 
@@ -95,7 +95,7 @@ export class ChatView extends ItemView {
 						<DarkModeProvider>
 							<SmartRAGSettingsProvider plugin={this.plugin}>
 								<DatabaseProvider
-									getDatabaseManager={() => this.plugin.getDatabaseService()}
+									getDatabaseManager={() => Promise.reject(new Error('Database not available in Smart RAG mode'))}
 								>
 									<RAGProvider getRAGEngine={getRAGEngine}>
 										<McpProvider getMcpManager={async () => new NullMcpManager({

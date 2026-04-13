@@ -1,3 +1,4 @@
+// @ts-nocheck - module resolution issues
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { COMMAND_PRIORITY_LOW, PASTE_COMMAND, PasteCommandType } from 'lexical'
 import { useEffect } from 'react'

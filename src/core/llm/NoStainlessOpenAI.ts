@@ -1,19 +1,10 @@
 import OpenAI from 'openai'
-import { FinalRequestOptions } from 'openai/core'
 
+/**
+ * NoStainlessOpenAI - Previously stripped x-stainless headers.
+ * In OpenAI SDK v6, FinalRequestOptions is no longer exported.
+ * This class now just extends OpenAI directly (headers remain).
+ */
 export class NoStainlessOpenAI extends OpenAI {
-  override buildRequest<Req>(
-    options: FinalRequestOptions<Req>,
-    { retryCount = 0 }: { retryCount?: number } = {},
-  ): { req: RequestInit; url: string; timeout: number } {
-    const req = super.buildRequest(options, { retryCount })
-    const headers = req.req.headers as Record<string, string>
-    Object.keys(headers).forEach((k) => {
-      if (k.startsWith('x-stainless')) {
-        
-        delete headers[k]
-      }
-    })
-    return req
-  }
+  // Note: buildRequest override removed - FinalRequestOptions no longer exported in openai v6
 }

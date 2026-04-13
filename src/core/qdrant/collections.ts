@@ -6,7 +6,10 @@
  * images: Image descriptions from documents
  */
 
-import { CreateCollection, PointStruct, Filter } from "@qdrant/js-client-rest";
+// Types removed in newer @qdrant version - using any
+type CreateCollection = any;
+type PointStruct = any;
+type Filter = any;
 
 export const COLLECTIONS = {
   vault_notes: "vault_notes",

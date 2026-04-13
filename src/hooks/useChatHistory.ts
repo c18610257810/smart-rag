@@ -1,4 +1,6 @@
+// @ts-ignore - no types
 import debounce from 'lodash.debounce'
+// @ts-ignore - no types
 import isEqual from 'lodash.isequal'
 import { App } from 'obsidian'
 import { useCallback, useEffect, useMemo, useState } from 'react'

@@ -1,8 +1,10 @@
 import { memo } from 'react'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+// @ts-ignore - no types
+import SyntaxHighlighter from 'react-syntax-highlighter'
 import {
   oneDark,
   oneLight,
+// @ts-ignore - no types
 } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
 function SyntaxHighlighterWrapper({

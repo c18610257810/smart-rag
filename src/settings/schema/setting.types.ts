@@ -12,7 +12,8 @@ import { embeddingModelSchema } from '../../types/embedding-model.types'
 import { mcpServerConfigSchema } from '../../types/mcp.types'
 import { llmProviderSchema } from '../../types/provider.types'
 
-import { SETTINGS_SCHEMA_VERSION } from './migrations'
+// Schema version (migrations disabled for Smart RAG)
+const SETTINGS_SCHEMA_VERSION = 12
 
 const ragOptionsSchema = z.object({
   chunkSize: z.number().catch(1000),
@@ -78,7 +79,23 @@ export const NeuralComposerSettingsSchema = z.object({
   lightRagSummaryLanguage: z.string().catch('English'), 
   lightRagShowCitations: z.boolean().catch(true),
   lightRagQueryMode: z.enum(['local', 'global', 'hybrid', 'naive', 'mix', 'bypass']).catch('mix'),
-  lightRagEmbeddingModelId: z.string().optional().catch(''), 
+  lightRagEmbeddingModelId: z.string().optional().catch(''),
+
+  // --- LightRAG SERVER CONFIG ---
+  lightRagEnabled: z.boolean().catch(false),
+  lightRagLlmBinding: z.string().catch('openai'),
+  lightRagLlmModel: z.string().catch(''),
+  lightRagLlmBaseUrl: z.string().catch(''),
+  lightRagLlmApiKey: z.string().catch(''),
+  lightRagEmbeddingBinding: z.string().catch('openai'),
+  lightRagEmbeddingModel: z.string().catch(''),
+  lightRagEmbeddingBaseUrl: z.string().catch(''),
+  lightRagEmbeddingApiKey: z.string().catch(''),
+  lightRagEmbeddingDim: z.number().catch(1024),
+  lightRagMaxAsync: z.number().catch(4),
+  lightRagMaxGraphNodes: z.number().catch(3000),
+  lightRagChunkingStrategy: z.string().catch('fixed'),
+  lightRagLogLevel: z.string().catch('INFO'), 
 
   // --- RERANKING ---
   lightRagRerankBinding: z.string().catch(''), 
@@ -151,7 +168,23 @@ export const DEFAULT_SETTINGS: NeuralComposerSettings = {
   lightRagSummaryLanguage: 'English',
   lightRagShowCitations: true,
   lightRagQueryMode: 'mix',
-  lightRagEmbeddingModelId: '', 
+  lightRagEmbeddingModelId: '',
+
+  // --- LightRAG SERVER DEFAULTS ---
+  lightRagEnabled: false,
+  lightRagLlmBinding: 'openai',
+  lightRagLlmModel: 'LongCat-Flash-Lite',
+  lightRagLlmBaseUrl: 'https://api.longcat.chat/openai/v1',
+  lightRagLlmApiKey: '',
+  lightRagEmbeddingBinding: 'openai',
+  lightRagEmbeddingModel: 'text-embedding-bge-m3',
+  lightRagEmbeddingBaseUrl: 'http://192.168.3.121:1234',
+  lightRagEmbeddingApiKey: 'EMPTY',
+  lightRagEmbeddingDim: 1024,
+  lightRagMaxAsync: 4,
+  lightRagMaxGraphNodes: 3000,
+  lightRagChunkingStrategy: 'fixed',
+  lightRagLogLevel: 'INFO', 
 
   // --- RERANK DEFAULTS ---
   lightRagRerankBinding: '',

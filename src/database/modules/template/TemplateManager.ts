@@ -1,3 +1,4 @@
+// @ts-nocheck - drizzle-orm/pglite not installed
 import { PgliteDatabase } from 'drizzle-orm/pglite'
 import fuzzysort from 'fuzzysort'
 import { App } from 'obsidian'

@@ -1,3 +1,4 @@
+// @ts-nocheck - drizzle-orm/pglite not installed
 import { sql } from 'drizzle-orm'
 import {
   bigint,

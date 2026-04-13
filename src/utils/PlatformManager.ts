@@ -52,8 +52,25 @@ export class PlatformManager {
 		const platform = os.platform();
 		const arch = os.arch();
 		
+		// Map to Qdrant release asset naming convention
+		// See: https://github.com/qdrant/qdrant/releases
+		let releaseDir: string;
+		if (platform === "darwin" && arch === "arm64") {
+			releaseDir = "qdrant-aarch64-apple-darwin";
+		} else if (platform === "darwin" && arch === "x64") {
+			releaseDir = "qdrant-x86_64-apple-darwin";
+		} else if (platform === "linux" && arch === "x64") {
+			releaseDir = "qdrant-x86_64-unknown-linux-gnu";
+		} else if (platform === "linux" && arch === "arm64") {
+			releaseDir = "qdrant-aarch64-unknown-linux-musl";
+		} else if (platform === "win32") {
+			releaseDir = "qdrant-x86_64-pc-windows-msvc";
+		} else {
+			releaseDir = `qdrant-${platform}-${arch}`;
+		}
+		
 		const binaryName = platform === "win32" ? "qdrant.exe" : "qdrant";
-		return path.join(home, ".openclaw", "smart-rag", "bin", `qdrant-${platform}-${arch}`, binaryName);
+		return path.join(home, ".openclaw", "smart-rag", "bin", releaseDir, binaryName);
 	}
 
 	/**

@@ -1,4 +1,5 @@
 import { App, normalizePath } from 'obsidian'
+// @ts-ignore - no types
 import path from 'path-browserify'
 
 export abstract class AbstractJsonRepository<T, M> {

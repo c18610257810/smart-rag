@@ -3,15 +3,19 @@
  * 
  * Converts SmartRAGSettings (simple single-config) to NeuralComposerSettings (array-based multi-provider/model).
  * This adapter allows Smart RAG to use Neural Composer's Chat components without modifying the settings structure.
+ * 
+ * Updated: 2026-04-09 — aligned with new no-hardcode settings structure
  */
 
 import { NeuralComposerSettings } from '../settings/schema/setting.types'
 import { ChatModel } from '../types/chat-model.types'
 import { EmbeddingModel } from '../types/embedding-model.types'
 import { LLMProvider } from '../types/provider.types'
-import { SETTINGS_SCHEMA_VERSION } from '../settings/schema/migrations'
+// Settings schema version (migrations deleted, using latest)
+const SETTINGS_SCHEMA_VERSION = 12;
 
-interface LLMConfig {
+// Must match SmartRAGSettings in main.ts
+interface ChatLLMConfig {
 	baseUrl: string;
 	apiKey: string;
 	modelName: string;
@@ -20,45 +24,62 @@ interface LLMConfig {
 }
 
 interface EmbeddingConfig {
+	provider: 'openai' | 'dashscope' | 'ollama';
 	baseUrl: string;
-	modelName: string;
-	dimension?: number;
+	apiKey: string;
+	model: string;
+	dimension: number;
+}
+
+interface RAGAnythingConfig {
+	enabled: boolean;
+	httpPort: number;
+	workingDir: string;
+	parser: string;
+	llmBaseUrl: string;
+	llmApiKey: string;
+	llmModel: string;
+	embeddingBaseUrl: string;
+	embeddingApiKey: string;
+	embeddingModel: string;
+	embeddingDimension: number;
+	llmConcurrency: number;
+	embeddingConcurrency: number;
 }
 
 interface SmartRAGSettings {
-	chatLLM: LLMConfig;
-	lightRAGLLM: LLMConfig;
-	semanticChunkLLM: LLMConfig;
-	lightRAGEmbedding: EmbeddingConfig;
-	lightRAGWorkingDir: string;
+	chatLLM: ChatLLMConfig;
+	embedding: EmbeddingConfig;
+	lightRAG: { serverUrl: string; llmConcurrency: number; embeddingConcurrency: number };
+	qdrant: { httpPort: number; dataDir: string };
+	ragAnything: RAGAnythingConfig;
+	rawFolderPath: string;
 }
 
 /**
- * Convert SmartRAG LLMConfig to Neural Composer LLMProvider
+ * Create LLMProvider from LLM config
  */
-function createProviderFromLLMConfig(
-	config: LLMConfig,
-	id: string,
-	name: string
+function createProvider(
+	baseUrl: string,
+	apiKey: string,
+	id: string
 ): LLMProvider {
 	return {
 		id,
-		name,
 		type: 'openai-compatible',
-		baseUrl: config.baseUrl,
-		apiKey: config.apiKey,
-		enabled: true,
+		baseUrl,
+		apiKey,
 		additionalSettings: {
-			noStainless: true, // Remove x-stainless headers for compatibility
+			noStainless: true,
 		},
 	}
 }
 
 /**
- * Convert SmartRAG LLMConfig to Neural Composer ChatModel
+ * Create ChatModel from LLM config
  */
-function createChatModelFromLLMConfig(
-	config: LLMConfig,
+function createChatModel(
+	modelName: string,
 	id: string,
 	providerId: string,
 	enable: boolean = true
@@ -67,125 +88,62 @@ function createChatModelFromLLMConfig(
 		id,
 		providerId,
 		providerType: 'openai-compatible',
-		model: config.modelName,
+		model: modelName,
 		enable,
-		// Note: maxTokens and temperature are not in ChatModel schema
 	}
 }
 
 /**
- * Convert SmartRAG EmbeddingConfig to Neural Composer EmbeddingModel
+ * Create EmbeddingModel from embedding config
  */
-function createEmbeddingModelFromConfig(
-	config: EmbeddingConfig,
+function createEmbeddingModel(
+	modelName: string,
+	dimension: number,
 	id: string,
 	providerId: string
 ): EmbeddingModel {
 	return {
 		id,
 		providerId,
-		providerType: 'lm-studio',
-		model: config.modelName,
-		dimension: config.dimension || 1024,
+		providerType: 'openai-compatible',
+		model: modelName,
+		dimension: dimension || 1024,
 	}
 }
 
 /**
  * Adapt SmartRAGSettings to NeuralComposerSettings
- * 
- * Mapping:
- * - chatLLM → provider 'chat-llm' + chatModel 'chat-model' (selected as chatModelId)
- * - lightRAGLLM → provider 'lightrag-llm' + chatModel 'lightrag-model'
- * - semanticChunkLLM → provider 'semantic-llm' + chatModel 'semantic-model'
- * - lightRAGEmbedding → provider 'embedding' + embeddingModel 'embedding-model'
  */
 export function adaptToNeuralComposerSettings(
 	smartRAGSettings: SmartRAGSettings
 ): NeuralComposerSettings {
-	// Create providers
-	const chatProvider = createProviderFromLLMConfig(
-		smartRAGSettings.chatLLM,
-		'chat-llm-provider',
-		'Chat LLM Provider'
-	)
-	
-	const lightRAGProvider = createProviderFromLLMConfig(
-		smartRAGSettings.lightRAGLLM,
-		'lightrag-llm-provider',
-		'LightRAG LLM Provider'
-	)
-	
-	const semanticProvider = createProviderFromLLMConfig(
-		smartRAGSettings.semanticChunkLLM,
-		'semantic-llm-provider',
-		'Semantic Chunk LLM Provider'
-	)
-	
-	const embeddingProvider: LLMProvider = {
-		id: 'embedding-provider',
-		name: 'Embedding Provider',
-		type: 'lm-studio', // Use lm-studio type for local embedding
-		baseUrl: smartRAGSettings.lightRAGEmbedding.baseUrl,
-		apiKey: '', // Local embedding usually doesn't need API key
-		enabled: true,
-	}
+	const chat = smartRAGSettings.chatLLM;
+	const emb = smartRAGSettings.embedding;
+	const rag = smartRAGSettings.ragAnything;
 
-	// Create chat models
-	const chatModel = createChatModelFromLLMConfig(
-		smartRAGSettings.chatLLM,
-		'chat-model',
-		'chat-llm-provider',
-		true
-	)
-	
-	const lightRAGModel = createChatModelFromLLMConfig(
-		smartRAGSettings.lightRAGLLM,
-		'lightrag-model',
-		'lightrag-llm-provider',
-		false // Not used for chat, just stored for LightRAG
-	)
-	
-	const semanticModel = createChatModelFromLLMConfig(
-		smartRAGSettings.semanticChunkLLM,
-		'semantic-model',
-		'semantic-llm-provider',
-		false // Not used for chat, just stored for semantic chunking
-	)
+	// Providers
+	const chatProvider = createProvider(chat.baseUrl, chat.apiKey, 'chat-provider');
+	const embeddingProvider = createProvider(emb.baseUrl, emb.apiKey, 'embedding-provider');
+	const ragLLMProvider = createProvider(rag.llmBaseUrl, rag.llmApiKey, 'rag-llm-provider');
 
-	// Create embedding model
-	const embeddingModel = createEmbeddingModelFromConfig(
-		smartRAGSettings.lightRAGEmbedding,
-		'embedding-model',
-		'embedding-provider'
-	)
+	// Models
+	const chatModel = createChatModel(chat.modelName, 'chat-model', 'chat-provider', true);
+	const embeddingModel = createEmbeddingModel(emb.model, emb.dimension, 'embedding-model', 'embedding-provider');
 
-	// Build NeuralComposerSettings
 	return {
 		version: SETTINGS_SCHEMA_VERSION,
-		
-		// Providers array
-		providers: [chatProvider, lightRAGProvider, semanticProvider, embeddingProvider],
-		
-		// Models arrays
-		chatModels: [chatModel, lightRAGModel, semanticModel],
+		providers: [chatProvider, embeddingProvider, ragLLMProvider],
+		chatModels: [chatModel],
 		embeddingModels: [embeddingModel],
-		
-		// Selected model IDs
 		chatModelId: 'chat-model',
-		applyModelId: 'chat-model', // Use chat model for apply as well
+		applyModelId: 'chat-model',
 		embeddingModelId: 'embedding-model',
-		
-		// Chat options (defaults)
 		chatOptions: {
 			includeCurrentFileContent: true,
-			enableTools: false, // Disable tools for simplicity
+			enableTools: false,
 			maxAutoIterations: 1,
 		},
-		
-		// System prompt (empty, user can configure)
 		systemPrompt: '',
-		
-		// RAG options (defaults)
 		ragOptions: {
 			chunkSize: 1000,
 			thresholdTokens: 8192,
@@ -194,56 +152,37 @@ export function adaptToNeuralComposerSettings(
 			excludePatterns: [],
 			includePatterns: [],
 		},
-		
-		// MCP (disabled)
-		mcp: {
-			servers: [],
-		},
-		
-		// LightRAG settings (from SmartRAGSettings)
+		mcp: { servers: [] },
 		enableAutoStartServer: false,
 		lightRagCommand: 'lightrag-server',
-		lightRagWorkDir: smartRAGSettings.lightRAGWorkingDir,
-		lightRagModelId: 'lightrag-model',
+		lightRagWorkDir: rag.workingDir,
+		lightRagModelId: '',
 		lightRagSummaryLanguage: 'English',
 		lightRagShowCitations: true,
 		lightRagQueryMode: 'mix',
 		lightRagEmbeddingModelId: 'embedding-model',
-		
-		// Reranking (disabled)
 		lightRagRerankBinding: '',
 		lightRagRerankModel: '',
 		lightRagRerankApiKey: '',
 		lightRagRerankHost: '',
 		lightRagRerankBindingType: '',
-		
-		// Ontology (disabled)
 		lightRagEntityTypes: '',
 		lightRagOntologyFolder: '',
 		useCustomEntityTypes: false,
 		graphViewMode: '2d',
-		
-		// Performance tuning (defaults)
-		lightRagMaxAsync: 4,
-		lightRagMaxParallelInsert: 1,
+		lightRagMaxAsync: rag.llmConcurrency,
+		lightRagMaxParallelInsert: rag.embeddingConcurrency,
 		lightRagChunkSize: 1200,
 		lightRagChunkOverlap: 100,
-		
-		// Custom env (empty)
 		lightRagCustomEnv: '',
 	}
 }
 
 /**
- * Type guard to check if settings is SmartRAGSettings
+ * Type guard
  */
 export function isSmartRAGSettings(settings: unknown): settings is SmartRAGSettings {
-	if (typeof settings !== 'object' || settings === null) return false
-	const s = settings as Record<string, unknown>
-	return (
-		'chatLLM' in s &&
-		'lightRAGLLM' in s &&
-		'semanticChunkLLM' in s &&
-		'lightRAGEmbedding' in s
-	)
+	if (typeof settings !== 'object' || settings === null) return false;
+	const s = settings as Record<string, unknown>;
+	return 'chatLLM' in s && 'embedding' in s && 'lightRAG' in s && 'ragAnything' in s;
 }

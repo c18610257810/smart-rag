@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronRight } from 'lucide-react'
+// @ts-ignore - no types
 import path from 'path-browserify'
 import { useState } from 'react'
 
