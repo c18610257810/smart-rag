@@ -64,9 +64,9 @@ export class LightRagManager {
 	private getHost(): string {
 		try {
 			const url = new URL(this.config.serverUrl);
-			return url.hostname || '127.0.0.1';
+			return url.hostname || '0.0.0.0';
 		} catch {
-			return '127.0.0.1';
+			return '0.0.0.0';
 		}
 	}
 

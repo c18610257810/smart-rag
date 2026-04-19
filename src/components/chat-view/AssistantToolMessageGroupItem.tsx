@@ -12,6 +12,7 @@ import AssistantMessageReasoning from './AssistantMessageReasoning'
 import AssistantToolMessageGroupActions from './AssistantToolMessageGroupActions'
 import ToolMessage from './ToolMessage'
 import ExcalidrawMessage from './ExcalidrawMessage'
+import DrawIoMessage from './DrawIoMessage'
 
 export type AssistantToolMessageGroupItemProps = {
   messages: AssistantToolMessageGroup
@@ -25,6 +26,9 @@ export type AssistantToolMessageGroupItemProps = {
   onGenerateExcalidraw?: () => void
   isExcalidrawGenerating?: boolean
   hasVaultQuery?: boolean
+  // Draw.io props
+  onGenerateDrawIo?: () => void
+  isDrawIoGenerating?: boolean
 }
 
 export default function AssistantToolMessageGroupItem({
@@ -39,6 +43,9 @@ export default function AssistantToolMessageGroupItem({
   onGenerateExcalidraw,
   isExcalidrawGenerating,
   hasVaultQuery,
+  // Draw.io props
+  onGenerateDrawIo,
+  isDrawIoGenerating,
 }: AssistantToolMessageGroupItemProps) {
   
   // --- CORA MOD: ESTADO DE EDICIÓN LOCAL ---
@@ -95,6 +102,14 @@ export default function AssistantToolMessageGroupItem({
         }
         return null
       })()}
+      {/* Draw.io diagram - render between content and actions */}
+      {(() => {
+        const assistantMsg = messages.find(m => m.role === 'assistant') as ChatAssistantMessage | undefined
+        if (assistantMsg?.drawio?.result) {
+          return <DrawIoMessage result={assistantMsg.drawio.result} />
+        }
+        return null
+      })()}
       {messages.length > 0 && (
         <AssistantToolMessageGroupActions 
             messages={messages} 
@@ -104,6 +119,9 @@ export default function AssistantToolMessageGroupItem({
             // Excalidraw props - only show if hasVaultQuery
             onGenerateExcalidraw={hasVaultQuery ? onGenerateExcalidraw : undefined}
             isExcalidrawGenerating={isExcalidrawGenerating}
+            // Draw.io props - show always
+            onGenerateDrawIo={onGenerateDrawIo}
+            isDrawIoGenerating={isDrawIoGenerating}
         />
       )}
     </div>

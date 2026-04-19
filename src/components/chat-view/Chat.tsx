@@ -1,6 +1,7 @@
 import { useMutation } from '@tanstack/react-query'
 import { Book, CircleStop, History, Plus } from 'lucide-react'
 import { App, Notice } from 'obsidian'
+import { DrawIoGeneratorAI } from '../../services/drawIoGeneratorAI'
 import {
   forwardRef,
   useCallback,
@@ -50,6 +51,8 @@ import { ErrorModal } from '../modals/ErrorModal'
 import { TemplateSectionModal } from '../modals/TemplateSectionModal'
 import { ExcalidrawGenerator } from '../../services/excalidrawGenerator'
 import { ExcalidrawRenderer } from '../../services/excalidrawRenderer'
+import { DrawIoGenerator } from '../../services/drawIoGenerator'
+import { DrawIoRenderer } from '../../services/drawIoRenderer'
 
 import AssistantToolMessageGroupItem from './AssistantToolMessageGroupItem'
 import ChatUserInput, { ChatUserInputRef } from '../chat-input/ChatUserInput'
@@ -60,6 +63,7 @@ import { useAutoScroll } from './useAutoScroll'
 import { useChatStreamManager } from './useChatStreamManager'
 import UserMessageItem from './UserMessageItem'
 import ExcalidrawMessage from './ExcalidrawMessage'
+import DrawIoMessage from './DrawIoMessage'
 
 const getNewInputMessage = (app: App): ChatUserMessage => {
   return {
@@ -138,6 +142,12 @@ const Chat = forwardRef<ChatRef, ChatProps>((props, ref) => {
   
   // Excalidraw generation state
   const [excalidrawGeneratingMessageId, setExcalidrawGeneratingMessageId] = useState<string | null>(null)
+  const [drawioGeneratingMessageId, setDrawIoGeneratingMessageId] = useState<string | null>(null)
+
+  // Draw.io state management (for context)
+  const [drawioXml, setDrawioXml] = useState<string | null>(null)
+  const [drawioPreviousXml, setDrawioPreviousXml] = useState<string | null>(null)
+  const drawioGeneratorRef = useRef<DrawIoGeneratorAI | null>(null)
 
   const groupedChatMessages: (ChatUserMessage | AssistantToolMessageGroup)[] =
     useMemo(() => {
@@ -496,6 +506,8 @@ const Chat = forwardRef<ChatRef, ChatProps>((props, ref) => {
       }
       
       const generator = new ExcalidrawGenerator()
+      console.log('[Generate Diagram] Starting generation...', { provider, model: chatModel.model })
+      
       const result = await generator.generate(
         provider.baseUrl || '',
         provider.apiKey || '',
@@ -503,6 +515,8 @@ const Chat = forwardRef<ChatRef, ChatProps>((props, ref) => {
         queryResults,
         userPrompt || 'Generate a visual diagram'
       )
+      
+      console.log('[Generate Diagram] Result:', result)
       
       // Update the message with the result
       setChatMessages((prevMessages) =>
@@ -541,6 +555,157 @@ const Chat = forwardRef<ChatRef, ChatProps>((props, ref) => {
       setExcalidrawGeneratingMessageId(null)
     }
   }, [chatMessages, settings])
+
+  // Draw.io generation handler
+  const handleGenerateDrawIo = useCallback(async (messageId: string) => {
+    // Find the assistant message
+    const assistantMessage = chatMessages.find(
+      (msg) => msg.id === messageId && msg.role === 'assistant'
+    ) as ChatAssistantMessage | undefined
+    
+    if (!assistantMessage) return
+    
+    // Find the previous user message with prompt content
+    const messageIndex = chatMessages.findIndex((msg) => msg.id === messageId)
+    let userPrompt = ''
+    
+    for (let i = messageIndex - 1; i >= 0; i--) {
+      const msg = chatMessages[i]
+      if (msg.role === 'user') {
+        // Check both promptContent (@vault query) and content (direct input)
+        let promptContent = msg.promptContent
+        let content = msg.content
+        
+        // Handle different types - extract text content properly
+        if (typeof promptContent === 'string') {
+          userPrompt = promptContent.trim()
+        } else if (promptContent && typeof promptContent === 'object') {
+          // If it's an array (multimodal format), extract text from each element
+          if (Array.isArray(promptContent)) {
+            userPrompt = promptContent
+              .map((item: any) => {
+                if (item && typeof item === 'object' && item.text) return item.text
+                if (typeof item === 'string') return item
+                return ''
+              })
+              .filter(Boolean)
+              .join('\n')
+              .trim()
+          } else if ((promptContent as any).text) {
+            // Single object with text field
+            userPrompt = (promptContent as any).text.trim()
+          } else {
+            userPrompt = JSON.stringify(promptContent)
+          }
+        } else if (typeof content === 'string') {
+          userPrompt = content.trim()
+        } else if (content && typeof content === 'object') {
+          if (Array.isArray(content)) {
+            userPrompt = content
+              .map((item: any) => {
+                if (item && typeof item === 'object' && item.text) return item.text
+                if (typeof item === 'string') return item
+                return ''
+              })
+              .filter(Boolean)
+              .join('\n')
+              .trim()
+          } else if ((content as any).text) {
+            userPrompt = (content as any).text.trim()
+          } else {
+            userPrompt = JSON.stringify(content)
+          }
+        } else {
+          userPrompt = String(promptContent || content || '').trim()
+        }
+        
+        console.log('[Generate Draw.io] User prompt type:', typeof (promptContent || content))
+        console.log('[Generate Draw.io] User prompt:', userPrompt.substring(0, 100))
+        break
+      }
+    }
+    
+    if (!userPrompt) {
+      new Notice('No user prompt found to generate diagram')
+      return
+    }
+    
+    setDrawIoGeneratingMessageId(messageId)
+    
+    try {
+      // Get LLM settings from current chat model
+      const chatModel = settings.chatModels.find(m => m.id === settings.chatModelId)
+      const provider = settings.providers.find(p => p.id === chatModel?.providerId)
+      if (!chatModel || !provider) {
+        throw new Error('Chat model or provider not found')
+      }
+      
+      // Initialize generator (reuse if exists)
+      if (!drawioGeneratorRef.current) {
+        drawioGeneratorRef.current = new DrawIoGeneratorAI(
+          chatModel.model,
+          provider.baseUrl || '',
+          provider.apiKey || ''
+        )
+      }
+      
+      const generator = drawioGeneratorRef.current
+      
+      // Set current state for context
+      generator.setState(drawioXml, drawioPreviousXml)
+      
+      console.log('[Generate Draw.io] Starting generation with AI SDK...', {
+        model: chatModel.model,
+        currentXml: drawioXml?.substring(0, 50) || 'null'
+      })
+      
+      // Generate diagram
+      const result = await generator.generate(userPrompt)
+      console.log('[Generate Draw.io] Result:', result)
+      
+      // Update state if successful
+      if (result.success && result.xml) {
+        setDrawioPreviousXml(drawioXml)
+        setDrawioXml(result.xml)
+      }
+      
+      // Update the message with the result
+      setChatMessages((prevMessages) =>
+        prevMessages.map((msg) =>
+          msg.id === messageId && msg.role === 'assistant'
+            ? {
+                ...msg,
+                drawio: {
+                  isGenerating: false,
+                  result,
+                },
+              }
+            : msg
+        )
+      )
+      
+    } catch (error) {
+      console.error('Failed to generate Draw.io:', error)
+      new Notice(`Failed to generate Draw.io: ${error instanceof Error ? error.message : String(error)}`)
+      
+      // Update with error
+      setChatMessages((prevMessages) =>
+        prevMessages.map((msg) =>
+          msg.id === messageId && msg.role === 'assistant'
+            ? {
+                ...msg,
+                drawio: {
+                  isGenerating: false,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+              }
+            : msg
+        )
+      )
+    } finally {
+      setDrawIoGeneratingMessageId(null)
+    }
+  }, [chatMessages])
 
   // Check if a message had @vault query
   const hasVaultQuery = useCallback((messageId: string): boolean => {
@@ -814,7 +979,12 @@ const Chat = forwardRef<ChatRef, ChatProps>((props, ref) => {
                   const assistantMsg = messageOrGroup.find(m => m.role === 'assistant')
                   if (assistantMsg) handleGenerateExcalidraw(assistantMsg.id)
                 }}
+                onGenerateDrawIo={() => {
+                  const assistantMsg = messageOrGroup.find(m => m.role === 'assistant')
+                  if (assistantMsg) handleGenerateDrawIo(assistantMsg.id)
+                }}
                 isExcalidrawGenerating={excalidrawGeneratingMessageId === messageOrGroup.find(m => m.role === 'assistant')?.id}
+                isDrawIoGenerating={drawioGeneratingMessageId === messageOrGroup.find(m => m.role === 'assistant')?.id}
                 hasVaultQuery={hasVaultQuery(messageOrGroup.find(m => m.role === 'assistant')?.id || '')}
               />
             </>

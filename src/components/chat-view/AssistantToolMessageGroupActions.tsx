@@ -102,7 +102,7 @@ function ExcalidrawButton({
           <button
             onClick={onGenerate}
             className="clickable-icon"
-            aria-label="Generate Diagram"
+            aria-label="Generate Excalidraw Diagram"
             disabled={isGenerating}
           >
             {isGenerating ? (
@@ -114,7 +114,43 @@ function ExcalidrawButton({
         </Tooltip.Trigger>
         <Tooltip.Portal>
           <Tooltip.Content className="smart-rag-tooltip-content">
-            {isGenerating ? 'Generating diagram...' : 'Generate diagram'}
+            {isGenerating ? 'Generating Excalidraw...' : 'Generate Excalidraw diagram'}
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
+  )
+}
+
+// Draw.io Button
+function DrawIoButton({ 
+  isGenerating, 
+  onGenerate 
+}: { 
+  isGenerating: boolean
+  onGenerate: () => void 
+}) {
+  return (
+    <Tooltip.Provider delayDuration={0}>
+      <Tooltip.Root>
+        <Tooltip.Trigger asChild>
+          <button
+            onClick={onGenerate}
+            className="clickable-icon"
+            aria-label="Generate Draw.io Diagram"
+            disabled={isGenerating}
+            style={{ backgroundColor: '#e3f2fd' }}
+          >
+            {isGenerating ? (
+              <Loader2 size={12} className="smart-rag-spinner-icon" />
+            ) : (
+              <BarChart3 size={12} style={{ color: '#1e88e5' }} />
+            )}
+          </button>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content className="smart-rag-tooltip-content">
+            {isGenerating ? 'Generating Draw.io...' : 'Generate Draw.io diagram'}
           </Tooltip.Content>
         </Tooltip.Portal>
       </Tooltip.Root>
@@ -193,12 +229,17 @@ export default function AssistantToolMessageGroupActions({
   // --- Excalidraw props ---
   onGenerateExcalidraw,
   isExcalidrawGenerating,
+  // --- Draw.io props ---
+  onGenerateDrawIo,
+  isDrawIoGenerating,
 }: {
   messages: AssistantToolMessageGroup
   onToggleEdit?: () => void
   isEditing?: boolean
   onGenerateExcalidraw?: () => void
   isExcalidrawGenerating?: boolean
+  onGenerateDrawIo?: () => void
+  isDrawIoGenerating?: boolean
 }) {
   return (
     <div className="smart-rag-assistant-message-actions">
@@ -208,6 +249,13 @@ export default function AssistantToolMessageGroupActions({
         <ExcalidrawButton 
           isGenerating={!!isExcalidrawGenerating} 
           onGenerate={onGenerateExcalidraw} 
+        />
+      )}
+      {/* Draw.io Button */}
+      {onGenerateDrawIo && (
+        <DrawIoButton 
+          isGenerating={!!isDrawIoGenerating} 
+          onGenerate={onGenerateDrawIo} 
         />
       )}
       {/* Botón de Editar (Solo si la función existe) */}

@@ -1,1116 +1,842 @@
-# Smart RAG — Obsidian 语义 RAG 插件
+# Smart RAG
 
-> **版本**: 1.1.0  
-> **作者**: Frank Zhang  
-> **许可证**: MIT  
-> **平台**: macOS Desktop Only  
-> **构建时间**: 2026-04-11
+**Obsidian 语义 RAG 插件** - 基于 Qdrant 向量存储和 LLM 的智能问答系统
 
----
-
-## 📋 目录
-
-1. [概述](#概述)
-2. [系统架构](#系统架构)
-3. [核心组件](#核心组件)
-4. [数据流](#数据流)
-5. [API 接口](#api-接口)
-6. [配置说明](#配置说明)
-7. [外部依赖](#外部依赖)
-8. [工作流程](#工作流程)
-9. [开发指南](#开发指南)
-10. [故障排查](#故障排查)
+![Smart RAG](https://img.shields.io/badge/Obsidian-Plugin-blue?logo=obsidian)
+![Version](https://img.shields.io/badge/version-1.1.0-green)
+![License](https://img.shields.io/badge/license-MIT-orange)
 
 ---
 
-## 概述
+## 目录
 
-Smart RAG 是一个 **Obsidian 插件**，提供完整的检索增强生成（RAG）解决方案。它将 Obsidian Vault 中的笔记、外部文档（PDF/Word/图片等）和图像进行向量化索引，存储到 Qdrant 向量数据库中，通过 LLM 提供语义搜索和智能问答。
+1. [设计逻辑](#设计逻辑)
+2. [设计流程](#设计流程)
+3. [系统架构](#系统架构)
+4. [脚本文件说明](#脚本文件说明)
+5. [变量调用说明](#变量调用说明)
+6. [环境依赖条件](#环境依赖条件)
+7. [技术栈接口说明](#技术栈接口说明)
+8. [安装与使用](#安装与使用)
+9. [故障排除](#故障排除)
 
-### 核心能力
+---
 
-| 能力 | 说明 |
-|------|------|
-| 📝 **Vault 笔记索引** | 自动扫描 Obsidian Vault 中的 Markdown 笔记，向量化后存入 Qdrant |
-| 📄 **外部文档索引** | 通过 RAG-Anything 解析 PDF/Word/PPT/Excel/图片等文档，提取文本和图像 |
-| 🔗 **知识图谱构建** | 通过 LightRAG 从笔记中提取实体和关系，构建知识图谱 |
-| 💬 **语义搜索 & 问答** | 基于向量的语义搜索 + LLM 生成的自然语言回答 |
-| 🖼️ **图像检索** | 支持图像描述向量化，按语义搜索图片 |
-| ⚙️ **全配置化** | 所有 API Key、URL、模型名均可配置，无硬编码凭据 |
+## 设计逻辑
 
-### 技术栈
+### 核心设计理念
 
-- **前端**: TypeScript + React 19 + Obsidian Plugin API
-- **向量数据库**: Qdrant (本地运行)
-- **Embedding**: OpenAI 兼容 API（支持 DashScope、Ollama、LM Studio）
-- **LLM**: OpenAI 兼容 API（支持 LongCat、Qwen、Claude 等）
-- **知识图谱**: LightRAG (Python)
-- **文档解析**: RAG-Anything (MinerU/Docling/PaddleOCR)
-- **构建工具**: esbuild + TypeScript
+Smart RAG 基于以下核心设计理念构建：
+
+1. **多源数据融合**: 同时索引 Obsidian Vault 笔记、外部文档(PDF/Word/图片)和图像，构建统一的知识库
+2. **语义检索优先**: 基于 Embedding 向量相似度进行语义搜索，而非简单的关键词匹配
+3. **本地优先**: 所有数据存储在本地 (Qdrant 向量数据库)，保护隐私
+4. **模块化服务**: 通过独立进程运行 Qdrant、LightRAG、RAG-Anything 服务，降低耦合
+
+### 检索增强生成逻辑
+
+```
+用户问题
+    |
+    v
+Embedding API -> 问题向量化
+    |
+    v
+并行搜索多源:
+|-- Qdrant vault-notes (Obsidian 笔记)
+|-- Qdrant raw-documents (外部文档)
+|-- Qdrant images (图像描述)
+|-- LightRAG 知识图谱 (可选)
+    |
+    v
+聚合 Top-K 结果
+    |
+    v
+构建上下文 Prompt
+    |
+    v
+LLM API -> 生成回答
+    |
+    v
+返回答答 + 引用来源
+```
+
+### 索引逻辑
+
+```
+文件发现
+    |
+    v
+文件类型判断:
+|-- Markdown -> 语义分块 -> Embedding -> Qdrant
+|-- PDF/Word/PPT -> RAG-Anything 解析 -> 提取文本/图像 -> Embedding -> Qdrant
+|-- 图像 -> VLM 描述 -> Embedding -> Qdrant
+    |
+    v
+(可选) LightRAG 知识图谱构建
+```
+
+---
+
+## 设计流程
+
+### 完整查询流程
+
+1. **Phase 1: 问题向量化**
+   - 调用 Embedding API
+   - 获取问题向量 (1024维)
+
+2. **Phase 2: 并行语义搜索**
+   - Qdrant vault-notes 搜索
+   - Qdrant raw-documents 搜索
+   - Qdrant images 搜索
+   - (可选) LightRAG 知识图谱查询
+
+3. **Phase 3: 结果聚合与排序**
+   - 合并多源搜索结果
+   - 按相似度排序
+   - 去重处理
+
+4. **Phase 4: 上下文构建**
+   - 提取 Top-K 文档片段
+   - 构建引用信息
+   - 组装 LLM Prompt
+
+5. **Phase 5: 回答生成**
+   - 调用 LLM API
+   - 流式输出处理
+   - 解析回答内容
+
+6. **Phase 6: 结果展示**
+   - 显示自然语言回答
+   - 展示引用来源
+   - 显示相关图像
+
+### 索引流程
+
+1. **Phase 1: 文件扫描**
+   - 遍历目标文件夹
+   - 过滤文件类型
+   - 生成文件列表
+
+2. **Phase 2: 内容提取**
+   - Markdown: 直接读取
+   - PDF/Word: RAG-Anything 解析
+   - 图像: VLM 生成描述
+
+3. **Phase 3: 语义分块**
+   - 按段落/语义边界切分
+   - 生成文本片段列表
+
+4. **Phase 4: 向量化**
+   - 调用 Embedding API
+   - 批量生成向量
+
+5. **Phase 5: 存储**
+   - 写入 Qdrant 集合
+   - (可选) 写入 LightRAG
+
+6. **Phase 6: 完成通知**
+   - 统计索引数量
+   - 显示完成提示
 
 ---
 
 ## 系统架构
 
+### 架构概览
+
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Obsidian                             │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │                  Smart RAG 插件                       │  │
-│  │                                                       │  │
-│  │  ┌──────────┐  ┌──────────────┐  ┌─────────────────┐  │  │
-│  │  │ChatView  │  │SettingTab    │  │IndexingEngine   │  │  │
-│  │  │(React UI)│  │(5 个配置页签) │  │(扫描/索引)      │  │  │
-│  │  └────┬─────┘  └──────┬───────┘  └────────┬────────┘  │  │
-│  │       │                │                    │           │  │
-│  │  ┌────┴────────────────┴────────────────────┴────────┐  │  │
-│  │  │              QueryEngine                          │  │  │
-│  │  │   (语义检索 + LLM 回答 + 多源聚合)                   │  │  │
-│  │  └────────────────────┬──────────────────────────────┘  │  │
-│  │                       │                                  │  │
-│  └───────────────────────┼──────────────────────────────────┘  │
-│                          │                                     │
-│  ┌───────────────────────┼──────────────────────────────────┐  │
-│  │        外部服务（通过子进程启动）                           │  │
-│  │                       │                                  │  │
-│  │  ┌─────────────┐  ┌──┴───────┐  ┌──────────────────┐    │  │
-│  │  │  LightRAG   │  │  Qdrant  │  │  RAG-Anything    │    │  │
-│  │  │  (知识图谱)  │  │(向量存储) │  │  (文档解析)       │    │  │
-│  │  │  :9621      │  │  :6333   │  │  :8000           │    │  │
-│  │  └──────┬──────┘  └────┬─────┘  └────────┬─────────┘    │  │
-│  └─────────┼──────────────┼─────────────────┼──────────────┘  │
-└────────────┼──────────────┼─────────────────┼─────────────────┘
-             │              │                 │
-             ▼              ▼                 ▼
-       ┌──────────┐  ┌──────────┐  ┌──────────────┐
-       │  LLM API  │  │ Embedding │  │  MinerU /    │
-       │ LongCat  │  │  API     │  │  Docling     │
-       │ Qwen     │  │ DashScope│  │  PaddleOCR   │
-       │ Claude   │  │ Ollama   │  │              │
-       └──────────┘  └──────────┘  └──────────────┘
+Obsidian
+    |
+    v
+Smart RAG Plugin
+    |
+    |-- ChatView (React UI)
+    |-- SettingsTab (5个配置页签)
+    |-- Ribbon Icon (Brain)
+    |
+    v
+main.ts (主控制器)
+    |
+    v
+Core Modules:
+|-- QdrantManager (向量数据库管理)
+|-- LightRAGManager (知识图谱管理)
+|-- RAGAnythingManager (文档解析管理)
+|-- IndexingEngine (索引引擎)
+|-- QueryEngine (查询引擎)
+|-- SemanticChunker (语义分块)
+    |
+    v
+External Services:
+|-- Qdrant (端口 6333)
+|-- LightRAG (端口 9621)
+|-- RAG-Anything (端口 8000)
+    |
+    v
+API Services:
+|-- LLM API (聊天/标签分析)
+|-- Embedding API (文本向量化)
 ```
+
+### 核心组件说明
+
+| 组件 | 文件路径 | 职责 |
+|------|----------|------|
+| **主控制器** | `src/main.ts` | 插件生命周期、服务协调、配置管理 |
+| **Qdrant 管理器** | `src/core/qdrant/QdrantManager.ts` | Qdrant 进程管理、配置生成 |
+| **Qdrant 客户端** | `src/core/qdrant/QdrantClient.ts` | Qdrant REST API 封装 |
+| **LightRAG 管理器** | `src/core/lightrag/LightRagManager.ts` | LightRAG 进程管理 |
+| **RAG-Anything 管理器** | `src/core/rag-anything/RAGAnythingManager.ts` | 文档解析服务管理 |
+| **索引引擎** | `src/core/indexing/IndexingEngine.ts` | 文件扫描、向量化、存储 |
+| **查询引擎** | `src/core/retrieval/QueryEngine.ts` | 语义搜索、结果聚合、回答生成 |
+| **语义分块器** | `src/utils/SemanticChunker.ts` | 文本语义切分 |
+| **聊天视图** | `src/ChatView.tsx` | React 聊天界面 |
+| **设置面板** | `src/settings/SettingsTab.tsx` | 配置 UI 界面 |
 
 ---
 
-## 核心组件
+## 脚本文件说明
 
-### 1. 插件主模块 (`main.ts`)
-
-**职责**: 插件生命周期管理、设置管理、服务协调
-
-#### 关键类和方法
-
-```typescript
-class SmartRAGPlugin extends Plugin {
-    settings: SmartRAGSettings;       // 全局配置
-    qdrantManager: QdrantManager;     // Qdrant 进程管理
-    qdrantClient: QdrantClientWrapper; // Qdrant API 客户端
-    ragAnythingManager: RAGAnythingManager; // 文档解析管理
-    lightRagManager: LightRagManager;  // LightRAG 进程管理
-    indexingEngine: IndexingEngine;    // 索引引擎
-    queryEngine: QueryEngine;          // 查询引擎
-}
-```
-
-#### 生命周期
-
-| 阶段 | 方法 | 说明 |
-|------|------|------|
-| 加载 | `onload()` | 读取配置、注册视图/命令/菜单、初始化子服务 |
-| 保存 | `saveSettings()` | 深合并配置 → 保存到 `data.json` → 同步到 LightRagManager |
-| 卸载 | `onunload()` | 清除定时器、停止所有外部服务 |
-
-#### 注册内容
-
-| 类型 | ID/名称 | 说明 |
-|------|---------|------|
-| View | `neuralcmp-chat-view` | 聊天面板视图 |
-| Ribbon Icon | 🧠 Brain | 点击打开聊天面板 |
-| Command | `open-chat-panel` | 打开聊天面板 |
-| Command | `index-raw-folder` | 索引外部文档文件夹 |
-| Context Menu | `Ingest file` | 右键文件 → 索引到 LightRAG |
-| Context Menu | `Ingest entire folder` | 右键文件夹 → 批量索引 |
-| Status Bar | Summary + 3 个服务状态点 | 每 5 秒刷新状态 |
-
-### 2. Qdrant 向量数据库
-
-#### QdrantManager (`core/qdrant/QdrantManager.ts`)
-
-**职责**: 本地 Qdrant 进程管理
-
-| 方法 | 说明 |
-|------|------|
-| `start()` | 下载二进制（如不存在）、生成配置文件、启动进程、等待健康检查 |
-| `stop()` | 发送 SIGTERM → 等待退出（5s）→ SIGKILL → lsof 清理端口 |
-| `isRunning()` | 通过 `lsof -i :6333 -sTCP:LISTEN` 检查进程状态 |
-| `waitForHealthy()` | 轮询 `/health` 端点，最长等待 90 秒 |
-| `ensureBinary()` | 下载 Qdrant 二进制到 `~/.openclaw/smart-rag/qdrant-bin/` |
-| `ensureConfig()` | 生成 `storage.yaml` 配置文件 |
-
-#### QdrantClientWrapper (`core/qdrant/QdrantClient.ts`)
-
-**职责**: Qdrant REST API 操作封装
-
-| 方法 | 说明 |
-|------|------|
-| `initialize()` | 创建 `@qdrant/js-client-rest` 客户端 |
-| `createCollections(dimension)` | 创建 3 个集合 |
-| `upsertVaultNotes(notes)` | 插入 Vault 笔记向量 |
-| `upsertRawDocuments(docs)` | 插入外部文档向量 |
-| `upsertImages(images)` | 插入图像向量 |
-| `searchVault(queryVector, topK)` | 语义搜索 Vault 笔记 |
-| `searchRaw(queryVector, topK)` | 语义搜索外部文档 |
-| `searchImages(queryVector, topK)` | 语义搜索图像 |
-| `deleteByPath(path)` | 按文件路径删除所有关联向量 |
-| `getAllStats()` | 获取所有集合的统计信息 |
-
-#### 集合定义 (`core/qdrant/collections.ts`)
-
-| 集合名 | 用途 | Payload 字段 |
-|--------|------|-------------|
-| `vault-notes` | Obsidian 笔记 | `path`, `title`, `content`, `mtime`, `hash`, `startLine`, `endLine` |
-| `raw-documents` | 外部文档 | `path`, `title`, `content`, `page`, `sourceFile`, `hash` |
-| `images` | 文档中的图像 | `description`, `sourceFile`, `page`, `hash`, `width`, `height` |
-
-### 3. LightRAG 知识图谱
-
-#### LightRagManager (`core/lightrag/LightRagManager.ts`)
-
-**职责**: 启动和管理 LightRAG Python 服务
-
-| 方法 | 说明 |
-|------|------|
-| `start()` | 构建命令行参数 → 构建环境变量 → spawn 子进程 → 等待健康检查 |
-| `stop()` | 发送 SIGTERM → 等待退出（5s）→ SIGKILL → lsof 清理端口 |
-| `isRunning()` | 通过 `lsof -i :{port} -sTCP:LISTEN` 检查进程状态 |
-| `updateConfig(config)` | 更新内部配置（用户修改设置后必须调用） |
-
-#### 启动参数
-
-```bash
-lightrag-server \
-  --host 127.0.0.1 \
-  --port 9621 \
-  --working-dir ~/.openclaw/lightrag-data \
-  --llm-binding openai \
-  --llm-binding-host <LLM_API_URL> \
-  --llm-model <LLM_MODEL> \
-  --embedding-binding openai \
-  --embedding-binding-host <EMBEDDING_API_URL> \
-  --embedding-model <EMBEDDING_MODEL> \
-  --max-async 4 \
-  --log-level INFO
-```
-
-#### 环境变量
-
-| 变量 | 说明 |
-|------|------|
-| `LLM_BINDING` | LLM 后端类型（openai/ollama） |
-| `LLM_BINDING_HOST` | LLM API 地址 |
-| `LLM_MODEL` | LLM 模型名 |
-| `LLM_BINDING_API_KEY` | LLM API Key |
-| `EMBEDDING_BINDING` | Embedding 后端类型 |
-| `EMBEDDING_BINDING_HOST` | Embedding API 地址 |
-| `EMBEDDING_MODEL` | Embedding 模型名 |
-| `EMBEDDING_BINDING_API_KEY` | Embedding API Key |
-| `EMBEDDING_DIM` | 向量维度 |
-
-#### LightRAG API 端点
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/documents/text` | POST | 索引单个文本文档 |
-| `/documents/texts` | POST | 批量索引多个文本片段 |
-| `/query` | POST | 知识图谱查询 |
-| `/health` | GET | 健康检查 |
-
-### 4. RAG-Anything 文档解析
-
-#### RAGAnythingManager (`core/rag-anything/RAGAnythingManager.ts`)
-
-**职责**: 启动和管理 RAG-Anything Python HTTP 服务
-
-| 方法 | 说明 |
-|------|------|
-| `start()` | 启动 Python HTTP 服务，传递配置参数 |
-| `stop()` | 发送 SIGTERM → 等待退出（5s）→ SIGKILL → lsof 清理端口 |
-| `isRunning()` | 通过 `lsof -i :{port} -sTCP:LISTEN` 检查进程状态 |
-| `isInstalled()` | 检查 RAG-Anything 是否已安装 |
-
-#### 启动参数
-
-```bash
-python3 server.py \
-  --host 127.0.0.1 \
-  --port 8000 \
-  --working-dir ~/.openclaw/rag-storage \
-  --parser mineru \
-  --llm-base-url <URL> \
-  --llm-api-key <KEY> \
-  --llm-model <MODEL> \
-  --embedding-base-url <URL> \
-  --embedding-api-key <KEY> \
-  --embedding-model <MODEL> \
-  --embedding-dimension 1024 \
-  --llm-concurrency 6 \
-  --embedding-concurrency 3
-```
-
-#### 解析器选项
-
-| 解析器 | 说明 | 适用场景 |
-|--------|------|---------|
-| `mineru` | MinerU（推荐） | PDF 文档，支持公式/表格/图像提取 |
-| `docling` | Docling | Word/Excel/PPT 文档 |
-| `paddleocr` | PaddleOCR | 扫描件/图片中的文字识别 |
-
-### 5. 索引引擎 (`core/indexing/IndexingEngine.ts`)
-
-**职责**: 扫描和索引文件到 Qdrant
-
-#### 索引流程
-
-```
-1. 扫描文件 (FileScanner)
-   ├── 扫描 Obsidian Vault (.md 文件)
-   └── 扫描 Raw Folder (PDF/Word/PPT/Excel/图片等)
-
-2. 向量化
-   ├── Markdown → 按段落分块 → Embedding API → 向量
-   └── 其他文档 → RAG-Anything 解析 → 提取文本/图像 → Embedding API → 向量
-
-3. 存储
-   └── Qdrant (vault-notes / raw-documents / images)
-```
-
-#### 进度反馈
-
-```typescript
-interface IndexingProgress {
-    phase: "scanning" | "indexing-vault" | "indexing-raw" | "done" | "error";
-    totalFiles: number;
-    processedFiles: number;
-    failedFiles: number;
-    currentFile: string;
-    message: string;
-}
-```
-
-### 6. 查询引擎 (`core/retrieval/QueryEngine.ts`)
-
-**职责**: 统一查询接口，跨多个数据源检索
-
-#### 查询流程
-
-```
-1. 用户输入问题
-   ↓
-2. 将问题向量化 (Embedding API)
-   ↓
-3. 并行搜索三个数据源
-   ├── vault-notes (Obsidian 笔记)
-   ├── raw-documents (外部文档)
-   └── images (图像描述)
-   ↓
-4. 聚合搜索结果，构建上下文
-   ↓
-5. 将上下文 + 问题发送给 LLM
-   ↓
-6. 返回自然语言回答 + 引用来源
-```
-
-#### 查询选项
-
-```typescript
-interface QueryOptions {
-    topK?: number;           // 返回结果数量 (默认 10)
-    includeVault?: boolean;  // 是否搜索 Vault (默认 true)
-    includeRaw?: boolean;    // 是否搜索外部文档 (默认 true)
-    includeImages?: boolean; // 是否搜索图像 (默认 true)
-    contextWindow?: number;  // 上下文窗口大小 (默认 8000)
-}
-```
-
-#### 返回结果
-
-```typescript
-interface QueryResult {
-    answer: string;      // LLM 生成的回答
-    sources: SourceInfo[];  // 引用来源列表
-    images: ImageInfo[];    // 相关图像列表
-    rawAnswer: string;      // 原始 LLM 输出
-    usedVault: boolean;     // 是否使用了 Vault 数据
-    usedRaw: boolean;       // 是否使用了外部文档数据
-    usedImages: boolean;    // 是否使用了图像数据
-}
-```
-
-### 7. 语义分块器 (`utils/SemanticChunker.ts`)
-
-**职责**: 将长文本按语义边界切分成块
-
-#### 分块策略
-
-| 策略 | 说明 |
-|------|------|
-| 基于 Embedding | 使用 Embedding API 计算段落相似度，在相似度突变处分割 |
-| 基于段落 (回退) | 按自然段落分割，不需要 API 调用 |
-
-#### 参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `breakpointThreshold` | 0.75 | 语义边界阈值 |
-| `maxChunkTokens` | 800 | 每个分块的最大 token 数 |
-| `overlapRatio` | 0.1 | 分块重叠比例 |
-| `minSentencesPerChunk` | 3 | 每个分块最少句子数 |
-
-### 8. 聊天界面 (`ChatView.tsx` + `components/`)
-
-**职责**: React 组件，提供用户交互界面
-
-#### 主要组件
-
-| 组件 | 说明 |
-|------|------|
-| `ChatView` | 主聊天面板，显示对话历史 |
-| `ChatInput` | 输入框，支持 @Vault 搜索触发 |
-| `QueryProgress` | 查询进度显示 |
-| `SettingsTab` | 5 个配置页签的渲染 |
-
----
-
-## 数据流
-
-### 索引数据流
-
-```
-┌─────────────────┐
-│   Obsidian      │
-│   Vault (.md)   │
-└────────┬────────┘
-         │ 读取文件内容
-         ▼
-┌─────────────────┐     ┌──────────────────┐
-│ SemanticChunker │ ──→ │  分块后的文本片段  │
-└────────┬────────┘     └────────┬─────────┘
-         │                       │ Embedding API
-         ▼                       ▼
-┌─────────────────────────────────────────┐
-│              Qdrant                     │
-│  ┌───────────┐ ┌─────────────┐         │
-│  │vault-notes│ │raw-documents│  ...    │
-│  └───────────┘ └─────────────┘         │
-└─────────────────────────────────────────┘
-```
-
-### 查询数据流
-
-```
-┌─────────────────┐
-│   用户问题       │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐     ┌──────────────────┐
-│ Embedding API   │ ──→ │  问题向量         │
-└────────┬────────┘     └────────┬─────────┘
-         │                       │
-         ▼                       ▼
-┌─────────────────────────────────────────┐
-│           Qdrant 语义搜索                │
-│  返回 Top-K 最相关片段                    │
-└────────┬────────────────────────────────┘
-         │ 相关上下文
-         ▼
-┌─────────────────┐     ┌──────────────────┐
-│   LLM API       │ ──→ │  自然语言回答      │
-└────────┬────────┘     └────────┬─────────┘
-         │                       │
-         ▼                       ▼
-┌─────────────────────────────────────────┐
-│           ChatView 显示结果              │
-│  回答 + 引用来源 + 相关图像               │
-└─────────────────────────────────────────┘
-```
-
-### LightRAG 知识图谱数据流
-
-```
-┌─────────────────┐
-│   Markdown 文件  │
-└────────┬────────┘
-         │ 语义分块
-         ▼
-┌─────────────────┐
-│  LightRAG API   │
-│  POST /documents/texts
-└────────┬────────┘
-         │ 提取实体和关系
-         ▼
-┌─────────────────┐
-│  知识图谱存储     │
-│  (Neo4j / JSON)  │
-└────────┬────────┘
-         │ 图谱检索
-         ▼
-┌─────────────────┐
-│  相关上下文      │
-│  (实体/关系/引用) │
-└─────────────────┘
-```
-
----
-
-## API 接口
-
-### 插件内部接口
-
-#### Embedding API (OpenAI 兼容)
-
-```
-POST {baseUrl}/v1/embeddings
-Headers:
-  Content-Type: application/json
-  Authorization: Bearer {apiKey}
-Body:
-  {
-    "model": "{model}",
-    "input": ["文本1", "文本2"]
-  }
-Response:
-  {
-    "data": [
-      { "embedding": [0.1, 0.2, ...] }
-    ]
-  }
-```
-
-#### LLM API (OpenAI 兼容)
-
-```
-POST {baseUrl}/chat/completions
-Headers:
-  Content-Type: application/json
-  Authorization: Bearer {apiKey}
-Body:
-  {
-    "model": "{model}",
-    "messages": [{"role": "user", "content": "prompt"}],
-    "max_tokens": 4096,
-    "temperature": 0.7
-  }
-Response:
-  {
-    "choices": [{
-      "message": { "content": "回答内容" }
-    }]
-  }
-```
-
-#### Qdrant REST API
-
-```
-GET  http://127.0.0.1:6333/health
-GET  http://127.0.0.1:6333/collections
-POST http://127.0.0.1:6333/collections/{name}/points
-POST http://127.0.0.1:6333/collections/{name}/points/search
-```
-
-#### LightRAG API
-
-```
-GET  http://127.0.0.1:9621/health
-POST http://127.0.0.1:9621/documents/text
-POST http://127.0.0.1:9621/documents/texts
-POST http://127.0.0.1:9621/query
-```
-
-#### RAG-Anything API
-
-```
-POST http://127.0.0.1:8000/parse    # 解析文档
-GET  http://127.0.0.1:8000/health   # 健康检查
-```
-
----
-
-## 配置说明
-
-### 配置存储位置
-
-```
-~/.obsidian/plugins/smart-rag/data.json
-```
-
-### 配置结构
-
-```typescript
-interface SmartRAGSettings {
-    chatLLM: ChatLLMConfig;       // 聊天 LLM 配置
-    embedding: EmbeddingConfig;    // Embedding 配置
-    lightRAG: LightRAGConfig;      // LightRAG 配置
-    qdrant: QdrantConfig;          // Qdrant 配置
-    ragAnything: RAGAnythingConfig;// RAG-Anything 配置
-    rawFolderPath: string;         // 外部文档文件夹路径
-}
-
-interface LightRAGConfig {
-    // ... 基础配置 ...
-    vectorStorage: 'NanoVectorDBStorage' | 'QdrantVectorDBStorage'; // 向量存储类型
-    qdrantUrl: string;             // Qdrant 服务地址（当 vectorStorage=QdrantVectorDBStorage）
-    llmConcurrency: number;        // LLM API 并发数
-    embeddingConcurrency: number;  // Embedding API 并发数
-    embeddingModel: string;        // Embedding 模型名
-    embeddingBaseUrl: string;      // Embedding API 地址
-    embeddingApiKey: string;       // Embedding API Key
-    embeddingDim: number;          // 向量维度
-}
-```
-
-### 设置页签
-
-| 页签 | 包含配置项 |
-|------|----------|
-| **Chat LLM** | Base URL, API Key, 模型名, Max Tokens, Temperature |
-| **Embedding** | Provider, Base URL, API Key, Model, Dimension + LightRAG LLM 配置 |
-| **LightRAG** | 启用开关, Server URL, 命令路径, 工作目录, LLM 配置, Embedding 配置, 并发控制, 分块策略, 日志级别 |
-| **Qdrant** | HTTP 端口, 数据目录 |
-| **RAG-Anything** | 启用开关, HTTP 端口, 工作目录, 解析器, LLM 配置, Embedding 配置, 并发控制 |
-
-### 配置持久化
-
-- 每个输入框的 `onChange` 都会自动更新 `settings` 对象
-- 点击 **Save** 按钮时调用 `saveSettings()` 保存到 `data.json`
-- `saveSettings()` 同时调用 `lightRagManager.updateConfig()` 同步最新配置
-- `loadSettings()` 使用深合并策略，保留默认值的同时应用用户修改
-
-### 配置同步机制
-
-```
-用户修改设置 → onChange 更新 settings 对象
-                              ↓
-                    点击 Save 按钮
-                              ↓
-            saveSettings() → 保存到 data.json
-                              ↓
-            lightRagManager.updateConfig() 同步配置
-                              ↓
-                    配置生效
-```
-
----
-
-## 外部依赖
-
-### Python 服务
-
-| 服务 | 安装方式 | Python 版本 | 端口 |
-|------|---------|------------|------|
-| **LightRAG** | `pip install lightrag` | 3.11+ | 9621 | **v1.4.13** |
-| **Qdrant** | 自动下载二进制 | N/A (Rust) | 6333 |
-| **RAG-Anything** | `pip install rag-anything` | 3.11+ | 8000 |
-
-### Python 虚拟环境
-
-```
-~/.openclaw/workspace/venv/     # LightRAG 使用的虚拟环境
-```
-
-### Embedding 服务
-
-| 服务 | Base URL 示例 | 模型 | 维度 | 说明 |
-|------|--------------|------|------|------|
-| **DashScope** | `https://dashscope.aliyuncs.com/v1` | `text-embedding-v3` | 1024 | 阿里云，推荐 |
-| **Ollama** | `http://127.0.0.1:11434` | `bge-m3` | 1024 | 本地运行 |
-| **LM Studio** | `http://127.0.0.1:1234` | `text-embedding-bge-m3` | 1024 | 本地运行 |
-| **OpenAI** | `https://api.openai.com/v1` | `text-embedding-3-small` | 1536 | 官方 API |
-
-### LLM 服务
-
-| 服务 | Base URL 示例 | 模型 | 说明 |
-|------|--------------|------|------|
-| **LongCat** | `https://api.longcat.chat/openai/v1` | `LongCat-Flash-Lite` | 免费额度 |
-| **DashScope** | `https://dashscope.aliyuncs.com/v1` | `qwen-plus` | 阿里云 |
-| **Ollama** | `http://127.0.0.1:11434` | `qwen2.5` | 本地运行 |
-
-### npm 依赖
-
-| 依赖 | 版本 | 用途 |
-|------|------|------|
-| `@qdrant/js-client-rest` | ^1.17.0 | Qdrant REST 客户端 |
-| `openai` | ^6.33.0 | OpenAI SDK |
-| `react` | ^19.2.4 | UI 框架 |
-| `lexical` | ^0.42.0 | 富文本编辑器 |
-| `@tanstack/react-query` | ^5.96.2 | 数据获取和缓存 |
-| `@anthropic-ai/sdk` | ^0.85.0 | Anthropic Claude SDK |
-| `@google/generative-ai` | ^0.24.1 | Google Gemini SDK |
-| `langchain` | ^1.3.1 | LLM 链式调用 |
-| `fuzzysort` | ^3.1.0 | 模糊搜索 |
-| `minimatch` | ^10.2.5 | 文件路径匹配 |
-
----
-
-## 工作流程
-
-### 1. 首次安装设置
-
-```
-1. 安装 Obsidian 插件
-   └── 复制 main.js, manifest.json 到 .obsidian/plugins/smart-rag/
-
-2. 配置 Embedding 服务
-   └── Provider: dashscope (推荐) 或 ollama
-   └── Base URL: https://dashscope.aliyuncs.com/v1
-   └── Model: text-embedding-v3
-   └── API Key: 你的阿里云 Key
-
-3. 配置 Chat LLM
-   └── Base URL: https://api.longcat.chat/openai/v1
-   └── Model: LongCat-Flash-Lite
-   └── API Key: 你的 API Key
-
-4. 启动外部服务
-   └── 在设置页签点击 Start 按钮
-   └── Qdrant → :6333
-   └── LightRAG → :9621 (可选)
-   └── RAG-Anything → :8000 (可选)
-
-5. 索引 Vault
-   └── 右键文件夹 → "Ingest entire folder"
-   └── 或右键文件 → "Ingest file"
-
-6. 开始使用
-   └── 点击 🧠 Ribbon 图标打开聊天面板
-   └── 输入问题，获取回答
-```
-
-### 2. 日常索引流程
-
-#### 索引单个文件
-```
-右键文件 → Ingest file
-  ↓
-读取文件内容
-  ↓
-语义分块 (按段落 + Embedding API)
-  ↓
-POST /documents/texts → LightRAG
-  ↓
-完成
-```
-
-#### 索引文件夹
-```
-右键文件夹 → Ingest entire folder
-  ↓
-遍历所有 .md 文件
-  ↓
-逐个文件分块 → LightRAG
-  ↓
-统计成功/失败数量
-  ↓
-完成通知
-```
-
-#### 索引外部文档
-```
-设置 Raw Folder 路径
-  ↓
-命令面板 → Index Raw Folder
-  ↓
-FileScanner 扫描所有文件
-  ↓
-RAG-Anything 解析文档
-  ↓
-Embedding API 向量化
-  ↓
-Qdrant 存储
-  ↓
-完成通知
-```
-
-### 3. 查询流程
-
-```
-用户在聊天面板输入问题
-  ↓
-Embedding API 将问题向量化
-  ↓
-并行搜索 Qdrant:
-  ├── vault-notes (语义搜索笔记)
-  ├── raw-documents (语义搜索文档)
-  └── images (语义搜索图像)
-  ↓
-聚合 Top-K 结果
-  ↓
-构建上下文 prompt
-  ↓
-LLM API 生成回答
-  ↓
-显示回答 + 引用来源
-```
-
-### 4. 设置保存流程
-
-```
-用户在设置界面修改配置
-  ↓
-onChange → 更新 settings 对象
-  ↓
-点击 Save 按钮
-  ↓
-saveSettings() 
-  ├── deepMerge(DEFAULT_SETTINGS, savedData)
-  ├── saveData(settings) → data.json
-  └── lightRagManager.updateConfig(config)
-  ↓
-Notice 提示 "Settings saved"
-```
-
----
-
-## 开发指南
-
-### 项目结构
+### 项目文件结构
 
 ```
 smart-rag/
-├── src/
-│   ├── main.ts                    # 插件入口
-│   ├── ChatView.tsx               # 聊天面板 React 组件
-│   ├── ApplyView.ts               # 应用视图 (stub)
-│   ├── constants.ts               # 常量定义
-│   ├── components/                # React 组件
-│   │   └── chat-view/            # 聊天视图相关组件
-│   ├── contexts/                  # React Contexts
-│   ├── core/                      # 核心模块
-│   │   ├── indexing/             # 索引引擎
-│   │   ├── lightrag/             # LightRAG 管理
-│   │   ├── llm/                  # LLM 提供者
-│   │   ├── mcp/                  # MCP 集成
-│   │   ├── qdrant/               # Qdrant 管理
-│   │   ├── rag/                  # RAG 引擎
-│   │   ├── rag-anything/         # RAG-Anything 管理
-│   │   └── retrieval/            # 查询引擎
-│   ├── database/                  # 数据库层 (PGlite stub)
-│   ├── hooks/                     # React Hooks
-│   ├── services/                  # 服务层
-│   ├── settings/                  # 设置类型
-│   ├── types/                     # 类型定义
-│   ├── ui/                        # UI 组件
-│   ├── utils/                     # 工具函数
-│   │   ├── SemanticChunker.ts    # 语义分块
-│   │   ├── PlatformManager.ts    # 平台适配
-│   │   └── ...
-│   └── views/                     # 视图
-├── package.json
-├── tsconfig.json
-├── esbuild.config.mjs
-├── manifest.json
-└── main.js                        # 构建输出
+|-- src/                          # 源代码目录
+|   |-- main.ts                   # 插件主入口 (57KB)
+|   |-- ChatView.tsx              # React 聊天视图 (4KB)
+|   |-- ApplyView.ts              # 应用视图 (1KB)
+|   |-- constants.ts              # 常量定义 (13KB)
+|   |-- core/                     # 核心模块
+|   |   |-- indexing/             # 索引引擎
+|   |   |   |-- IndexingEngine.ts # 主索引引擎
+|   |   |-- lightrag/             # LightRAG 模块
+|   |   |   |-- LightRagManager.ts# LightRAG 管理器
+|   |   |-- llm/                  # LLM 提供者
+|   |   |-- mcp/                  # MCP 集成
+|   |   |-- qdrant/               # Qdrant 模块
+|   |   |   |-- QdrantManager.ts  # Qdrant 管理器
+|   |   |   |-- QdrantClient.ts   # Qdrant 客户端
+|   |   |   |-- collections.ts    # 集合定义
+|   |   |-- rag/                  # RAG 引擎
+|   |   |-- rag-anything/         # RAG-Anything 模块
+|   |   |   |-- RAGAnythingManager.ts
+|   |   |-- retrieval/            # 检索引擎
+|   |   |   |-- QueryEngine.ts    # 查询引擎
+|   |-- components/               # React 组件
+|   |-- contexts/                 # React Contexts
+|   |-- database/                 # 数据库层
+|   |-- hooks/                    # React Hooks
+|   |-- services/                 # 服务层
+|   |-- settings/                 # 设置相关
+|   |-- types/                    # 类型定义
+|   |-- ui/                       # UI 组件
+|   |-- utils/                    # 工具函数
+|   |   |-- SemanticChunker.ts    # 语义分块器
+|   |   |-- PlatformManager.ts    # 平台适配
+|   |-- views/                    # 视图
+|-- package.json                  # npm 配置
+|-- tsconfig.json                 # TypeScript 配置
+|-- esbuild.config.mjs            # 构建配置
+|-- manifest.json                 # 插件清单
+|-- main.js                       # 构建输出 (~8MB)
+|-- styles.css                    # 样式文件
+|-- README.md                     # 本文档
 ```
 
-### 构建命令
+### 关键脚本文件详细说明
 
-```bash
-# 开发模式 (watch)
-npm run dev
+#### 1. main.ts (插件主入口)
+- **路径**: `src/main.ts`
+- **大小**: ~57KB
+- **职责**:
+  - 插件生命周期管理 (`onload`, `onunload`)
+  - 服务初始化协调 (Qdrant, LightRAG, RAG-Anything)
+  - 配置管理 (`loadSettings`, `saveSettings`)
+  - 命令注册 (打开聊天面板、索引文件夹)
+  - 右键菜单注册
+  - 状态栏更新
 
-# 生产构建
-npm run build
+#### 2. QdrantManager.ts (Qdrant 管理器)
+- **路径**: `src/core/qdrant/QdrantManager.ts`
+- **职责**:
+  - Qdrant 二进制下载和管理
+  - 配置文件生成 (`storage.yaml`)
+  - 进程启动/停止控制
+  - 健康检查轮询
 
-# 版本发布
-npm run version
-```
+#### 3. QdrantClient.ts (Qdrant 客户端)
+- **路径**: `src/core/qdrant/QdrantClient.ts`
+- **职责**:
+  - Qdrant REST API 封装
+  - 集合创建和管理
+  - 向量插入和搜索
+  - 统计信息获取
 
-### 构建输出
+#### 4. LightRagManager.ts (LightRAG 管理器)
+- **路径**: `src/core/lightrag/LightRagManager.ts`
+- **职责**:
+  - LightRAG 服务进程管理
+  - 配置同步和更新
+  - 健康检查
 
-```
-main.js          # 打包后的插件主文件 (~8MB)
-manifest.json    # 插件元数据
-styles.css       # 样式文件
-```
+#### 5. RAGAnythingManager.ts (RAG-Anything 管理器)
+- **路径**: `src/core/rag-anything/RAGAnythingManager.ts`
+- **职责**:
+  - RAG-Anything 服务启动
+  - 文档解析参数配置
+  - 远程 MinerU API 支持
 
-### 部署路径
+#### 6. IndexingEngine.ts (索引引擎)
+- **路径**: `src/core/indexing/IndexingEngine.ts`
+- **职责**:
+  - 文件扫描和过滤
+  - 内容提取和分块
+  - 批量向量化
+  - 进度反馈
 
-```
-~/Library/CloudStorage/OneDrive-个人/应用/remotely-save/OneDrive-Vault/.obsidian/plugins/smart-rag/
-```
+#### 7. QueryEngine.ts (查询引擎)
+- **路径**: `src/core/retrieval/QueryEngine.ts`
+- **职责**:
+  - 多源并行搜索
+  - 结果聚合和排序
+  - 上下文构建
+  - LLM 回答生成
 
-### 代码风格
+#### 8. SemanticChunker.ts (语义分块器)
+- **路径**: `src/utils/SemanticChunker.ts`
+- **职责**:
+  - 基于 Embedding 的语义切分
+  - 段落回退策略
+  - 分块参数配置
 
-- **缩进**: Tab (Obsidian 默认)
-- **引号**: 单引号
-- **分号**: 需要
-- **TypeScript**: strict 模式
-- **React**: 19 + JSX
+#### 9. ChatView.tsx (聊天视图)
+- **路径**: `src/ChatView.tsx`
+- **职责**:
+  - React 聊天界面渲染
+  - 消息历史管理
+  - 流式输出显示
+  - 引用来源展示
 
 ---
 
-## 故障排查
+## 变量调用说明
 
-### LightRAG 启动失败
+### 核心配置变量
 
-**症状**: 点击 Start 无反应或报错
+#### SmartRAGSettings (主配置对象)
 
-**排查步骤**:
-1. 检查配置是否正确 — 查看 `data.json` 中的 `lightRAG` 配置
-2. 检查 LightRAG 是否已安装 — `which lightrag-server`
-3. 查看控制台日志 — Obsidian DevTools (Cmd+Option+I)
-4. 检查端口占用 — `lsof -i :9621`
-5. 检查 Embedding 服务 — `curl {baseUrl}/v1/embeddings`
-
-**常见问题**:
-- Embedding API 返回空数据 → 检查 baseUrl 和 model 是否匹配
-- LLM API 401 → 检查 API Key 是否正确
-- 进程启动后自动退出 → 查看 stderr 日志
-
-### Qdrant 启动失败
-
-**症状**: 状态显示红色圆点
-
-**排查步骤**:
-1. 检查端口 — `lsof -i :6333`
-2. 检查二进制 — `ls ~/.openclaw/smart-rag/qdrant-bin/`
-3. 查看配置文件 — `cat ~/.openclaw/smart-rag/qdrant-data/config/storage.yaml`
-4. 首次启动可能较慢（90 秒超时）
-
-### Embedding 失败
-
-**症状**: 索引时报错 "No embedding data received"
-
-**排查步骤**:
-1. 直接测试 API — `curl -X POST {baseUrl}/v1/embeddings -d '{"model":"xxx","input":["test"]}'`
-2. 检查模型名 — 确保模型名与 provider 匹配
-3. 检查网络 — localhost 服务是否运行
-4. 检查返回格式 — 必须是 OpenAI 兼容格式
-
-### 索引慢
-
-**原因**:
-- Embedding API 并发数过低
-- 文档数量过多
-- 语义分块需要额外 API 调用
-
-**优化**:
-- 增加 `Embedding Concurrency` (默认 3 → 6)
-- 使用更快的 Embedding 模型
-- 减少语义分块的最大 chunk 大小
-
-### Electron 网络限制
-
-**问题**: Obsidian 的 Electron 渲染进程对 localhost 的网络请求可能被限制
-
-**解决方案**:
-- Embedding 请求使用 `curl` 子进程绕过限制
-- Qdrant 请求通过 `@qdrant/js-client-rest`（Node.js 层）处理
-
-### 插件配置未同步到 LightRAG
-
-**症状**: 修改设置后启动 LightRAG，参数仍是旧的
-
-**原因**: `lightRagManager` 在 `onload()` 时创建，之后不会自动更新
-
-**解决方案**:
-1. 点击 LightRAG 页签的 **Save & Sync** 按钮（已修复）
-2. 或先 Stop 再 Start，`saveSettings()` 会自动调用 `updateConfig()`
-
----
-
-### MinerU 远程 API 配置（待添加到 Smart RAG 配置面板）⭐⭐⭐
-
-**发现日期**: 2026-04-11
-
-**问题**: RAG-anything 默认启动参数硬编码，无法动态配置 MinerU 远程 API
-
-**背景**: 
-- macOS MinerU 并发限制为 1（源码硬编码）
-- Windows/Linux MinerU 默认并发 3，可配置更高
-- Smart RAG 需要支持远程 MinerU API（如 Windows 服务器）
-
-**当前硬编码参数**: 
 ```typescript
-// src/core/rag-anything/RAGAnythingManager.ts
-const args = [
-  '--host', config.host || '127.0.0.1',
-  '--port', config.port || 8000,
-  '--working-dir', config.workingDir,
-  '--parser', config.parser || 'mineru',
-  // 缺少以下参数:
-  // '--mineru-api-url', config.mineruApiUrl || '',
-  // '--max-concurrent-files', config.maxConcurrentFiles || 4,
-];
+interface SmartRAGSettings {
+  // 聊天 LLM 配置
+  chatLLM: ChatLLMConfig;
+  
+  // Embedding 配置
+  embedding: EmbeddingConfig;
+  
+  // LightRAG 配置
+  lightRAG: LightRAGConfig;
+  
+  // Qdrant 配置
+  qdrant: QdrantConfig;
+  
+  // RAG-Anything 配置
+  ragAnything: RAGAnythingConfig;
+  
+  // 外部文档文件夹路径
+  rawFolderPath: string;
+}
 ```
 
-**需要添加的配置字段**: 
+#### ChatLLMConfig (聊天 LLM 配置)
+
+```typescript
+interface ChatLLMConfig {
+  baseUrl: string;        // API 基础 URL
+  apiKey: string;         // API 密钥
+  modelName: string;      // 模型名称
+  maxTokens: number;      // 最大 Token 数
+  temperature: number;    // 温度参数
+}
+```
+
+#### EmbeddingConfig (Embedding 配置)
+
+```typescript
+interface EmbeddingConfig {
+  provider: 'openai' | 'dashscope' | 'ollama';
+  baseUrl: string;        // API 基础 URL
+  apiKey: string;         // API 密钥
+  model: string;          // 模型名称
+  dimension: number;      // 向量维度 (默认 1024)
+}
+```
+
+#### LightRAGConfig (LightRAG 配置)
+
+```typescript
+interface LightRAGConfig {
+  enabled: boolean;               // 是否启用
+  serverUrl: string;              // 服务地址
+  command: string;                // 启动命令
+  workingDir: string;             // 工作目录
+  // LLM 配置
+  llmBinding: string;
+  llmModel: string;
+  llmBaseUrl: string;
+  llmApiKey: string;
+  // Embedding 配置
+  embeddingBinding: string;
+  embeddingModel: string;
+  embeddingBaseUrl: string;
+  embeddingApiKey: string;
+  embeddingDim: number;
+  // 向量存储配置
+  vectorStorage: 'NanoVectorDBStorage' | 'QdrantVectorDBStorage';
+  qdrantUrl: string;
+  // 分块配置
+  chunkOverlapSize: number;
+  maxGleaning: number;
+  entityTypes: string[];
+  // 检索配置
+  summaryLanguage: string;
+  cosineThreshold: number;
+  forceLLMSummaryOnMerge: number;
+  relatedChunkNumber: number;
+  // 其他选项
+  maxGraphNodes: number;
+  chunkingStrategy: string;
+  logLevel: string;
+  // 并发控制
+  llmConcurrency: number;
+  embeddingConcurrency: number;
+}
+```
+
+#### RAGAnythingConfig (RAG-Anything 配置)
 
 ```typescript
 interface RAGAnythingConfig {
-  // ... 现有配置 ...
-  
-  // 新增 MinerU 远程 API 配置
-  mineruApiUrl?: string;        // 远程 MinerU API URL (如 'http://192.168.3.253:8001')
-  mineruApiEnabled?: boolean;   // 是否启用远程 MinerU API
-  maxConcurrentFiles?: number;  // 最大并发文件数 (默认 4)
+  enabled: boolean;               // 是否启用
+  httpPort: number;               // HTTP 端口
+  workingDir: string;             // 工作目录
+  parser: 'mineru' | 'docling' | 'paddleocr';  // 解析器类型
+  // LLM 配置
+  llmBaseUrl: string;
+  llmApiKey: string;
+  llmModel: string;
+  // Embedding 配置
+  embeddingBaseUrl: string;
+  embeddingApiKey: string;
+  embeddingModel: string;
+  embeddingDimension: number;
+  // 并发控制
+  llmConcurrency: number;
+  embeddingConcurrency: number;
+  // MinerU 远程 API 配置
+  mineruApiUrl: string;
+  mineruApiEnabled: boolean;
+  maxConcurrentFiles: number;
 }
 ```
 
-**Smart RAG 配置面板需要**: 
+#### QdrantConfig (Qdrant 配置)
 
-1. **RAG-Anything 页签新增输入框**:
-   - MinerU API URL (文本输入)
-   - 启用远程 MinerU (开关)
-   - 最大并发文件数 (数字输入，默认 4)
-
-2. **参数传递逻辑**:
 ```typescript
-if (config.mineruApiEnabled && config.mineruApiUrl) {
-  args.push('--mineru-api-url', config.mineruApiUrl);
+interface QdrantConfig {
+  httpPort: number;               // HTTP 端口 (默认 6333)
+  dataDir: string;                // 数据目录
 }
-args.push('--max-concurrent-files', String(config.maxConcurrentFiles || 4));
 ```
 
-**远程 MinerU API 优势**: 
-- ✅ Windows/Linux 无并发限制
-- ✅ 远程 GPU 加速 VLM 推理
-- ✅ 本地 macOS 无需安装 MinerU
+### 全局变量访问
 
-**使用场景**: 
-- 本地 macOS + 远程 Windows MinerU
-- 本地 macOS + 远程 Linux VPS MinerU
-
-**已验证**: 
-- ✅ 远程 MinerU API (192.168.3.253:8001) 正常工作
-- ✅ RAG-anything 参数传递正常
-- ✅ 并发 4 文件处理正常
-
-**修改优先级**: 中（等 LightRAG 处理完后再修改）
-
-**相关文件**: 
-- `src/main.ts` — RAGAnythingConfig 类型定义
-- `src/core/rag-anything/RAGAnythingManager.ts` — 启动参数
-- `src/settings/SettingsTab.tsx` — 配置页签 UI
-
----
-
-**发现日期**: 2026-04-11
-
-**症状**: 修改 `data.json` 后，RAG-Anything 运行参数仍是旧的
-
-**现象**: 
-- `data.json` 中 `ragAnything.llmBaseUrl` = `https://dashscope.aliyuncs.com/v1`
-- 实际运行参数 `--llm-base-url` = `https://api.longcat.chat/openai/v1`
-- **Web UI 显示的配置与实际运行参数一致**，与 `data.json` 不一致
-
-**验证方法**:
-1. 查看进程参数: `ps aux | grep rag-anything`
-2. 查看 Web UI: http://127.0.0.1:8000/ → ⚙️ 配置
-3. 对比 `data.json`: `.obsidian/plugins/smart-rag/data.json`
-
-**根因分析**: 
-
-对比 LightRAG 和 RAG-Anything 的配置同步机制：
-
-| Manager | updateConfig() | saveSettings 同步 |
-|---------|---------------|-------------------|
-| LightRagManager | ✅ 有 | ✅ 调用 `updateConfig()` |
-| RAGAnythingManager | ❌ **没有** | ❌ **未同步** |
-
-**问题流程**:
-```
-启动时: new RAGAnythingManager(settings.ragAnything) — 用当时的 settings
-  ↓
-运行中: UI 修改 → saveSettings() → 保存到 data.json ✅
-  ↓
-关键问题: saveSettings() 未调用 ragAnythingManager.updateConfig() ❌
-  ↓
-结果: data.json 有新值，但 ragAnythingManager.config 仍是旧值
-  ↓
-验证: Stop → Start 后会用 data.json 的新配置启动
-```
-
-**修复方案**: 
-
-1. **添加 `updateConfig()` 方法到 RAGAnythingManager**
 ```typescript
-updateConfig(config: Partial<RAGAnythingConfig>) {
-    Object.assign(this.config, config);
+// 在插件主类中访问
+this.settings                          // 完整配置对象
+this.qdrantManager                     // Qdrant 管理器实例
+this.qdrantClient                      // Qdrant 客户端实例
+this.lightRagManager                   // LightRAG 管理器实例
+this.ragAnythingManager                // RAG-Anything 管理器实例
+this.indexingEngine                    // 索引引擎实例
+this.queryEngine                       // 查询引擎实例
+```
+
+### 环境变量
+
+```bash
+# LightRAG 服务环境变量
+LLM_BINDING=openai
+LLM_BINDING_HOST=<LLM_API_URL>
+LLM_MODEL=<MODEL_NAME>
+LLM_BINDING_API_KEY=<API_KEY>
+EMBEDDING_BINDING=openai
+EMBEDDING_BINDING_HOST=<EMBEDDING_URL>
+EMBEDDING_MODEL=text-embedding-bge-m3
+EMBEDDING_BINDING_API_KEY=<API_KEY>
+EMBEDDING_DIM=1024
+```
+
+---
+
+## 环境依赖条件
+
+### 系统要求
+
+| 项目 | 要求 |
+|------|------|
+| **操作系统** | macOS 10.15+ / Windows 10+ / Linux |
+| **Obsidian** | v1.0.0+ |
+| **Node.js** | v18+ (开发构建需要) |
+| **Python** | v3.11+ (外部服务需要) |
+
+### 外部服务依赖
+
+#### 1. Qdrant (必需)
+- **用途**: 向量数据库存储
+- **安装**: 自动下载二进制
+- **默认端口**: 6333
+- **数据目录**: `~/.openclaw/smart-rag/qdrant-data/`
+
+#### 2. LightRAG (可选)
+- **用途**: 知识图谱构建
+- **安装**: `pip install lightrag`
+- **默认端口**: 9621
+- **Python 版本**: 3.11+
+
+#### 3. RAG-Anything (可选)
+- **用途**: PDF/Word 文档解析
+- **安装**: `pip install rag-anything`
+- **默认端口**: 8000
+- **依赖**: MinerU/Docling/PaddleOCR
+
+#### 4. LLM 服务 (必需)
+- **用途**: 聊天回答生成
+- **推荐**: LongCat, DashScope, OpenAI
+- **配置**: Base URL, API Key, Model
+
+#### 5. Embedding 服务 (必需)
+- **用途**: 文本向量化
+- **推荐**: DashScope, LM Studio, Ollama
+- **配置**: Base URL, API Key, Model, Dimension
+
+### npm 依赖
+
+```json
+{
+  "dependencies": {
+    "@qdrant/js-client-rest": "^1.17.0",
+    "@anthropic-ai/sdk": "^0.85.0",
+    "@google/generative-ai": "^0.24.1",
+    "@tanstack/react-query": "^5.96.2",
+    "langchain": "^1.3.1",
+    "lexical": "^0.42.0",
+    "lucide-react": "^1.7.0",
+    "minimatch": "^10.2.5",
+    "openai": "^6.33.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "uuid": "^13.0.0",
+    "fuzzysort": "^3.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.14",
+    "esbuild": "^0.24.0",
+    "obsidian": "latest",
+    "typescript": "^5.6.0"
+  }
 }
 ```
 
-2. **在 `saveSettings()` 中同步 RAG-Anything 配置**
-```typescript
-async saveSettings(newSettings?: SmartRAGSettings) {
-    // ... LightRAG 同步（已有）
-    
-    // 新增：同步 RAG-Anything
-    if (this.ragAnythingManager) {
-        this.ragAnythingManager.updateConfig(this.settings.ragAnything);
-    }
-    await this.saveData(this.settings);
+### Python 依赖
+
+```
+lightrag>=0.1.0
+rag-anything>=0.1.0
+qdrant-client>=1.0.0
+openai>=1.0.0
+numpy>=1.24.0
+```
+
+---
+
+## 技术栈接口说明
+
+### 1. LLM API 接口 (OpenAI 兼容)
+
+#### 聊天完成接口
+
+```http
+POST {baseUrl}/chat/completions
+Content-Type: application/json
+Authorization: Bearer {apiKey}
+
+{
+  "model": "{model}",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "{question}"}
+  ],
+  "max_tokens": 4096,
+  "temperature": 0.7,
+  "stream": true
 }
 ```
 
-**临时解决方案**: 
-- 修改配置后，必须 **Stop → Start** RAG-Anything 才能应用新配置
+### 2. Embedding API 接口 (OpenAI 兼容)
 
-**优先级**: 低（等 LightRAG 处理完 5000 文件后再修复）
+```http
+POST {baseUrl}/v1/embeddings
+Content-Type: application/json
+Authorization: Bearer {apiKey}
 
-**相关文件**: 
-- `src/main.ts` — `saveSettings()` 方法
-- `src/core/rag-anything/RAGAnythingManager.ts` — 需添加 `updateConfig()`
-
----
-
-### Stop 后进程残留（v1.0.0 已修复）
-
-**症状**: 点击 Stop 后 UI 显示已停止，但进程仍运行，再按 Start 出现 2 个进程
-
-**原因**: `stop()` 发送 SIGTERM 后立即设置 `this.process = null`，进程还没退出
-
-**修复**: v1.1.0 改为 async stop()，等待进程真正退出后再清理
-
-**流程**:
-```
-SIGTERM → 等待 5 秒 → SIGKILL（强制）→ lsof 清理端口 → this.process = null
+{
+  "model": "{embeddingModel}",
+  "input": ["文本片段1", "文本片段2"]
+}
 ```
 
+**响应格式**:
+```json
+{
+  "data": [
+    {"embedding": [0.1, 0.2, ...], "index": 0},
+    {"embedding": [0.3, 0.4, ...], "index": 1}
+  ]
+}
+```
+
+### 3. Qdrant REST API
+
+#### 健康检查
+
+```http
+GET http://127.0.0.1:6333/health
+```
+
+#### 创建集合
+
+```http
+PUT http://127.0.0.1:6333/collections/{collection_name}
+Content-Type: application/json
+
+{
+  "vectors": {
+    "size": 1024,
+    "distance": "Cosine"
+  }
+}
+```
+
+#### 搜索向量
+
+```http
+POST http://127.0.0.1:6333/collections/{collection_name}/points/search
+Content-Type: application/json
+
+{
+  "vector": [0.1, 0.2, ...],
+  "limit": 10,
+  "with_payload": true
+}
+```
+
+### 4. LightRAG API
+
+#### 健康检查
+
+```http
+GET http://127.0.0.1:9621/health
+```
+
+#### 索引文本
+
+```http
+POST http://127.0.0.1:9621/documents/texts
+Content-Type: application/json
+
+{
+  "texts": ["文本片段1", "文本片段2"]
+}
+```
+
+#### 查询知识图谱
+
+```http
+POST http://127.0.0.1:9621/query
+Content-Type: application/json
+
+{
+  "query": "查询问题",
+  "mode": "hybrid"
+}
+```
+
+### 5. RAG-Anything API
+
+#### 解析文档
+
+```http
+POST http://127.0.0.1:8000/parse
+Content-Type: application/json
+
+{
+  "file_path": "/path/to/document.pdf",
+  "parser": "mineru"
+}
+```
+
+#### 健康检查
+
+```http
+GET http://127.0.0.1:8000/health
+```
+
 ---
 
-### INFO 日志显示为 ERROR（v1.0.0 已修复）
+## 安装与使用
 
-**症状**: Obsidian Console 中大量红色 ERROR 日志，实际只是 Python INFO
+### 安装步骤
 
-**原因**: Python 程序习惯把所有日志输出到 stderr，被错误标记为 `console.error`
+#### 1. 克隆仓库
 
-**修复**: v1.1.0 区分日志级别，只有包含 `ERROR/CRITICAL/Traceback/Exception` 才显示红色
+```bash
+cd ~/.obsidian/plugins/
+git clone <repository-url> smart-rag
+cd smart-rag
+```
 
-**规则**:
-| stderr 内容 | 显示方式 |
-|-------------|----------|
-| 包含 ERROR/CRITICAL/Traceback/Exception/Failed | `console.error`（红色）|
-| 其他（INFO/DEBUG/WARNING） | `console.log`（正常）|
+#### 2. 安装依赖
+
+```bash
+npm install
+```
+
+#### 3. 构建插件
+
+```bash
+npm run build
+```
+
+#### 4. 启用插件
+
+1. 打开 Obsidian 设置
+2. 进入 第三方插件 → 已安装插件
+3. 启用 Smart RAG
+
+### 配置步骤
+
+#### 1. Embedding 配置
+
+进入设置 → Smart RAG → Embedding:
+- **Provider**: dashscope (推荐)
+- **Base URL**: https://dashscope.aliyuncs.com/v1
+- **Model**: text-embedding-v3
+- **Dimension**: 1024
+
+#### 2. Chat LLM 配置
+
+进入设置 → Smart RAG → Chat LLM:
+- **Base URL**: https://api.longcat.chat/openai/v1
+- **Model**: LongCat-Flash-Lite
+- **Max Tokens**: 4096
+
+#### 3. 启动外部服务
+
+在设置页签中:
+1. Qdrant → 点击 Start
+2. LightRAG → 点击 Start (可选)
+3. RAG-Anything → 点击 Start (可选)
+
+#### 4. 索引 Vault
+
+1. 右键文件夹 → "Ingest entire folder"
+2. 或命令面板 → "Index Raw Folder"
+
+### 使用方法
+
+#### 打开聊天面板
+
+- 点击 Ribbon 图标 (🧠 Brain)
+- 或命令面板 → "Open Chat Panel"
+
+#### 提问
+
+1. 在聊天输入框输入问题
+2. 按 Enter 发送
+3. 等待回答生成
+4. 查看引用来源和相关图像
 
 ---
 
-### Embedding 服务离线导致索引失败
+## 故障排除
 
-**症状**: LightRAG 索引大量失败（1204 个），日志显示 `APIConnectionError`
+### 常见问题
 
-**原因**: LM Studio 或 Embedding 服务已关闭或网络不通
+#### 1. Qdrant 启动失败
+
+**症状**: 状态显示红色圆点
 
 **排查**:
 ```bash
-# 检查服务是否在线
-ping 192.168.3.121
-curl http://192.168.3.121:1234/v1/models
+# 检查端口占用
+lsof -i :6333
+
+# 检查二进制
+ls ~/.openclaw/smart-rag/qdrant-bin/
+
+# 查看配置
+cat ~/.openclaw/smart-rag/qdrant-data/config/storage.yaml
 ```
 
+#### 2. LightRAG 启动失败
+
+**症状**: 点击 Start 无反应
+
+**排查**:
+```bash
+# 检查 LightRAG 是否安装
+which lightrag-server
+
+# 检查端口
+lsof -i :9621
+
+# 查看日志
+openclaw logs --follow
+```
+
+#### 3. Embedding 失败
+
+**症状**: "No embedding data received"
+
+**排查**:
+```bash
+# 测试 Embedding API
+curl -X POST {baseUrl}/v1/embeddings \
+  -H "Authorization: Bearer {apiKey}" \
+  -d '{"model":"{model}","input":["test"]}'
+```
+
+#### 4. 索引慢
+
+**优化建议**:
+- 增加 `Embedding Concurrency` (默认 3 → 6)
+- 使用更快的 Embedding 服务
+- 减少语义分块的最大 chunk 大小
+
+#### 5. 进程残留
+
+**症状**: Stop 后进程仍在运行
+
 **解决方案**:
-1. 重新启动 LM Studio 并加载 `text-embedding-bge-m3` 模型
-2. 或切换到云端 Embedding（DashScope）
+```bash
+# 手动清理端口
+lsof -i :6333 -sTCP:LISTEN | awk 'NR>1 {print $2}' | xargs kill -9
+lsof -i :9621 -sTCP:LISTEN | awk 'NR>1 {print $2}' | xargs kill -9
+lsof -i :8000 -sTCP:LISTEN | awk 'NR>1 {print $2}' | xargs kill -9
+```
 
 ---
 
@@ -1118,34 +844,849 @@ curl http://192.168.3.121:1234/v1/models
 
 ### v1.1.0 (2026-04-11)
 
-- ✅ **修复 Stop 进程残留 bug**
-  - `stop()` 改为 async，等待进程真正退出后再清理 `this.process`
-  - 流程：SIGTERM → 等待 5s → SIGKILL → lsof 清理端口
-  - 解决点击 Stop 后进程残留、再按 Start 出现 2 个进程的问题
-- ✅ **修复 INFO 日志显示为 ERROR**
-  - stderr 输出区分日志级别
-  - 只有包含 ERROR/CRITICAL/Traceback/Exception 才显示红色
-  - Python INFO/DEBUG 日志正常显示
-- ✅ **配置增强**
-  - LightRAG 支持 Vector Storage 选择（NanoVectorDB vs Qdrant）
-  - 新增 `qdrantUrl` 配置字段
-  - LLM 和 Embedding 并发数分离
-  - Embedding 配置独立页签
+- 修复 Stop 进程残留 bug
+- 修复 INFO 日志显示为 ERROR
+- 配置增强: Vector Storage 选择、并发数分离
 
 ### v1.0.0 (2026-04-10)
 
-- ✅ 初始版本
-- ✅ Qdrant 向量数据库集成
-- ✅ LightRAG 知识图谱支持
-- ✅ RAG-Anything 文档解析
-- ✅ 语义搜索和问答
-- ✅ 5 个配置页签 + 保存按钮
-- ✅ 右键菜单索引文件和文件夹
-- ✅ 状态栏服务状态监控
-- ✅ 取消插件激活时自动启动外部服务
-- ✅ 修复设置同步问题（updateConfig）
-- ✅ 修复 LightRAG embedding 参数传递
+- 初始版本
+- Qdrant 向量数据库集成
+- LightRAG 知识图谱支持
+- RAG-Anything 文档解析
+- 语义搜索和问答
 
 ---
 
-*本文档由薯条 🍟 于 2026-04-11 08:55 更新*
+## 服务配置详解（Agent 阅读指南）
+
+> 本章节专为 AI Agent 设计，说明 Smart RAG 如何将用户配置传递给外部服务。
+
+### 配置文件位置
+
+| 服务 | 配置文件 | 数据目录 |
+|------|----------|----------|
+| **Smart RAG 插件** | `{Vault}/.obsidian/plugins/smart-rag/data.json` | — |
+| **LightRAG** | 环境变量传递 | `~/.openclaw/lightrag-data/smart-rag/` |
+| **Qdrant** | `~/.openclaw/smart-rag/qdrant-config/config.yaml` | `~/.openclaw/smart-rag/qdrant-data/` |
+| **RAG-Anything** | 命令行参数传递 | `~/.openclaw/rag-anything-data/` |
+
+---
+
+### LightRAG 服务配置
+
+#### 配置传递流程
+
+```
+data.json (用户填写)
+    |
+    v
+LightRagManager.ts
+    |
+    v
+buildEnvVars() 方法
+    |
+    v
+环境变量字典
+    |
+    v
+spawn(lightrag-server, { env: envVars })
+    |
+    v
+LightRAG Python 进程
+    |
+    v
+os.getenv('LLM_BINDING_HOST', '') 等读取配置
+```
+
+#### data.json 配置字段
+
+```json
+{
+  "lightRAG": {
+    "enabled": true,
+    "serverUrl": "http://127.0.0.1:9621",
+    "command": "lightrag-server",
+    "workingDir": "~/.openclaw/lightrag-data/smart-rag",
+    
+    // LLM 配置（用户填写）
+    "llmBinding": "openai",
+    "llmModel": "LongCat-Flash-Lite",
+    "llmBaseUrl": "https://api.longcat.chat/openai/v1",
+    "llmApiKey": "ak_xxxxx",
+    
+    // Embedding 配置（用户填写）
+    "embeddingBinding": "openai",
+    "embeddingModel": "text-embedding-bge-m3",
+    "embeddingBaseUrl": "http://127.0.0.1:1234/v1",
+    "embeddingApiKey": "lmstudio",
+    "embeddingDim": 1024,
+    
+    // 向量存储配置
+    "vectorStorage": "QdrantVectorDBStorage",
+    "qdrantUrl": "http://127.0.0.1:6333",
+    
+    // 其他配置...
+    "llmConcurrency": 20,
+    "embeddingConcurrency": 2,
+    "chunkOverlapSize": 300,
+    "maxGleaning": 3,
+    "entityTypes": ["Industry", "Domain", ...],
+    "summaryLanguage": "Chinese",
+    "cosineThreshold": 0.2,
+    "forceLLMSummaryOnMerge": 8,
+    "relatedChunkNumber": 10,
+    "maxGraphNodes": 30000,
+    "chunkingStrategy": "fixed",
+    "logLevel": "INFO"
+  }
+}
+```
+
+#### 环境变量映射表（LightRagManager.ts → buildEnvVars()）
+
+| data.json 字段 | 环境变量名 | 用途 | 示例值 |
+|---------------|-----------|------|--------|
+| `llmBinding` | `LLM_BINDING` | LLM 提供者类型 | `openai` |
+| `llmModel` | `LLM_MODEL` | LLM 模型名称 | `LongCat-Flash-Lite` |
+| `llmBaseUrl` | `LLM_BINDING_HOST` | LLM API 地址 | `https://api.longcat.chat/openai/v1` |
+| `llmBaseUrl` | `OPENAI_API_BASE` | Python LightRAG 使用 ⭐ | 同上 |
+| `llmApiKey` | `LLM_BINDING_API_KEY` | LLM API 密钥 | `ak_xxxxx` |
+| `llmApiKey` | `OPENAI_API_KEY` | Python LightRAG 使用 ⭐ | 同上 |
+| `embeddingBinding` | `EMBEDDING_BINDING` | Embedding 提供者 | `openai` |
+| `embeddingModel` | `EMBEDDING_MODEL` | Embedding 模型 | `text-embedding-bge-m3` |
+| `embeddingBaseUrl` | `EMBEDDING_BINDING_HOST` | Embedding API 地址 | `http://127.0.0.1:1234/v1` |
+| `embeddingBaseUrl` | `OPENAI_EMBEDDING_API_BASE` | Python LightRAG 使用 | 同上 |
+| `embeddingApiKey` | `EMBEDDING_BINDING_API_KEY` | Embedding API 密钥 | `lmstudio` |
+| `embeddingDim` | `EMBEDDING_DIM` | 向量维度 | `1024` |
+| `vectorStorage` | `LIGHTRAG_VECTOR_STORAGE` | 向量存储类型 | `QdrantVectorDBStorage` |
+| `qdrantUrl` | `QDRANT_URL` | Qdrant 地址 | `http://127.0.0.1:6333` |
+| `chunkOverlapSize` | `CHUNK_OVERLAP_SIZE` | 分块重叠大小 | `300` |
+| `maxGleaning` | `MAX_GLEANING` | 最大提取次数 | `3` |
+| `entityTypes` | `ENTITY_TYPES` | 实体类型 JSON | `["Industry",...]` |
+| `summaryLanguage` | `SUMMARY_LANGUAGE` | 摘要语言 | `Chinese` |
+| `cosineThreshold` | `COSINE_THRESHOLD` | 相似度阈值 | `0.2` |
+| `forceLLMSummaryOnMerge` | `FORCE_LLM_SUMMARY_ON_MERGE` | 强制摘要阈值 | `8` |
+| `relatedChunkNumber` | `RELATED_CHUNK_NUMBER` | 相关块数量 | `10` |
+| `llmConcurrency` | `MAX_ASYNC` | 最大并发数 | `20` |
+| `embeddingConcurrency` | `EMBEDDING_FUNC_MAX_ASYNC` | Embedding 并发 | `2` |
+| `llmConcurrency` | `MAX_PARALLEL_INSERT` | 并行插入数 | `20` |
+| `maxGraphNodes` | `MAX_GRAPH_NODES` | 最大图节点 | `30000` |
+| `chunkingStrategy` | `LIGHTRAG_CHUNKING_STRATEGY` | 分块策略 | `fixed` |
+| — | `LLM_TIMEOUT` | LLM 超时（固定） | `600` (10分钟) |
+
+⭐ **关键注意**: Python LightRAG 代码使用 `OPENAI_API_BASE` 和 `OPENAI_API_KEY`，不是 `LLM_BINDING_HOST`。`buildEnvVars()` 同时设置两者以确保兼容。
+
+#### CLI 启动参数（LightRagManager.ts → start()）
+
+```bash
+lightrag-server \
+  --host 127.0.0.1 \
+  --port 9621 \
+  --working-dir ~/.openclaw/lightrag-data/smart-rag \
+  --llm-binding openai \
+  --embedding-binding openai \
+  --max-async 20 \
+  --log-level INFO
+```
+
+**注意**: LLM/Embedding 的 host/model/apiKey 通过**环境变量**传递，不是 CLI 参数。
+
+#### 手动启动 LightRAG（Agent 可执行）
+
+```bash
+# 设置环境变量
+export LLM_BINDING=openai
+export LLM_MODEL=LongCat-Flash-Lite
+export LLM_BINDING_HOST=https://api.longcat.chat/openai/v1
+export OPENAI_API_KEY=ak_xxxxx
+export OPENAI_API_BASE=https://api.longcat.chat/openai/v1
+export EMBEDDING_BINDING=openai
+export EMBEDDING_MODEL=text-embedding-bge-m3
+export EMBEDDING_BINDING_HOST=http://127.0.0.1:1234/v1
+export EMBEDDING_DIM=1024
+export LIGHTRAG_VECTOR_STORAGE=QdrantVectorDBStorage
+export QDRANT_URL=http://127.0.0.1:6333
+export LLM_TIMEOUT=600
+
+# 启动服务
+~/.openclaw/workspace/venv/bin/lightrag-server \
+  --host 127.0.0.1 \
+  --port 9621 \
+  --working-dir ~/.openclaw/lightrag-data/smart-rag \
+  --llm-binding openai \
+  --embedding-binding openai \
+  --max-async 20 \
+  --log-level INFO
+```
+
+#### API 端点
+
+| 端点 | 方法 | 用途 |
+|------|------|------|
+| `/health` | GET | 健康检查 |
+| `/documents/texts` | POST | 索引文本 |
+| `/documents/upload` | POST | 上传文档 |
+| `/documents/status_counts` | GET | 文档状态统计 |
+| `/documents/reprocess_failed` | POST | 重试失败文档 |
+| `/query` | POST | 查询知识图谱 |
+
+---
+
+### Qdrant 服务配置
+
+#### 配置传递流程
+
+```
+data.json (qdrant 字段)
+    |
+    v
+QdrantManager.ts
+    |
+    v
+ensureConfig() 方法
+    |
+    v
+生成 config.yaml
+    |
+    v
+spawn(qdrant, [--config-path, config.yaml])
+    |
+    v
+Qdrant 进程
+```
+
+#### data.json 配置字段
+
+```json
+{
+  "qdrant": {
+    "httpPort": 6333,
+    "dataDir": "~/.openclaw/smart-rag/qdrant-data",
+    "autoStart": true
+  }
+}
+```
+
+#### config.yaml 生成内容（~/.openclaw/smart-rag/qdrant-config/config.yaml）
+
+```yaml
+# Auto-generated config for Smart RAG
+storage:
+  storage_path: ~/.openclaw/smart-rag/qdrant-data
+
+service:
+  host: 127.0.0.1
+  http_port: 6333
+  grpc_port: 6334
+
+log_level: info
+
+telemetry_disabled: true
+```
+
+#### 手动启动 Qdrant（Agent 可执行）
+
+```bash
+# 使用生成的配置启动
+~/.openclaw/smart-rag/qdrant-bin/qdrant \
+  --config-path ~/.openclaw/smart-rag/qdrant-config/config.yaml
+```
+
+#### API 端点
+
+| 端点 | 方法 | 用途 |
+|------|------|------|
+| `/health` | GET | 健康检查 |
+| `/collections` | GET | 列出集合 |
+| `/collections/{name}` | PUT | 创建集合 |
+| `/collections/{name}/points/search` | POST | 搜索向量 |
+| `/collections/{name}/points` | PUT | 插入向量 |
+
+---
+
+### RAG-Anything 服务配置
+
+#### 配置传递流程
+
+```
+data.json (ragAnything 字段)
+    |
+    v
+RAGAnythingManager.ts
+    |
+    v
+构建 CLI 参数数组
+    |
+    v
+spawn(python, [server.py, --llm-base-url, ..., --embedding-model, ...])
+    |
+    v
+RAG-Anything HTTP 服务
+```
+
+#### data.json 配置字段
+
+```json
+{
+  "ragAnything": {
+    "enabled": true,
+    "httpPort": 8000,
+    "workingDir": "~/.openclaw/rag-anything-data",
+    "parser": "mineru",
+    
+    // LLM 配置
+    "llmBaseUrl": "https://api.longcat.chat/openai/v1",
+    "llmApiKey": "ak_xxxxx",
+    "llmModel": "LongCat-Flash-Lite",
+    
+    // Embedding 配置
+    "embeddingBaseUrl": "http://127.0.0.1:1234/v1",
+    "embeddingApiKey": "lmstudio",
+    "embeddingModel": "text-embedding-bge-m3",
+    "embeddingDimension": 1024,
+    
+    // 并发控制
+    "llmConcurrency": 4,
+    "embeddingConcurrency": 8,
+    
+    // MinerU 远程 API
+    "mineruApiEnabled": true,
+    "mineruApiUrl": "https://mineru.api.url",
+    "maxConcurrentFiles": 4
+  }
+}
+```
+
+#### CLI 启动参数（RAGAnythingManager.ts → start()）
+
+```bash
+python ~/.openclaw/skills/rag-anything/rag_anything_server.py \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --working-dir ~/.openclaw/rag-anything-data \
+  --parser mineru \
+  --llm-base-url https://api.longcat.chat/openai/v1 \
+  --llm-api-key ak_xxxxx \
+  --llm-model LongCat-Flash-Lite \
+  --embedding-base-url http://127.0.0.1:1234/v1 \
+  --embedding-api-key lmstudio \
+  --embedding-model text-embedding-bge-m3 \
+  --embedding-dimension 1024 \
+  --llm-concurrency 4 \
+  --embedding-concurrency 8 \
+  --mineru-api-url https://mineru.api.url \
+  --max-concurrent-files 4
+```
+
+**注意**: RAG-Anything 通过**命令行参数**传递配置，不使用环境变量。
+
+#### 手动启动 RAG-Anything（Agent 可执行）
+
+```bash
+~/.openclaw/workspace/venv/bin/python \
+  ~/.openclaw/skills/rag-anything/rag_anything_server.py \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --parser mineru \
+  --llm-base-url https://api.longcat.chat/openai/v1 \
+  --llm-api-key ak_xxxxx \
+  --llm-model LongCat-Flash-Lite \
+  --embedding-base-url http://127.0.0.1:1234/v1 \
+  --embedding-model text-embedding-bge-m3
+```
+
+#### API 端点
+
+| 端点 | 方法 | 用途 |
+|------|------|------|
+| `/health` | GET | 健康检查 |
+| `/parse` | POST | 解析文档 |
+| `/query` | POST | 查询文档库 |
+
+---
+
+### 跨系统部署指南（远程访问）
+
+#### 问题场景
+
+手机端 Obsidian 无法访问 Mac Mini 的本地服务（`127.0.0.1`），需要配置远程访问。
+
+#### 解决方案：Tailscale
+
+**步骤 1: Mac Mini 启动 Tailscale**
+
+```bash
+tailscale up
+```
+
+**步骤 2: 获取 Tailscale IP**
+
+```bash
+tailscale ip
+# 输出: 100.x.y.z
+```
+
+**步骤 3: 修改 data.json 配置**
+
+```json
+{
+  "lightRAG": {
+    "serverUrl": "http://100.x.y.z:9621",
+    "qdrantUrl": "http://100.x.y.z:6333"
+  }
+}
+```
+
+**步骤 4: 手机端安装 Tailscale App**
+
+- iOS: App Store 搜索 "Tailscale"
+- 登录同一 Tailscale 账号
+- 连接后可访问 `100.x.y.z` 网络
+
+#### 解决方案：局域网
+
+**前提**: Mac Mini WiFi 连接，手机在同一 WiFi 网络。
+
+**步骤 1: 获取 Mac Mini 局域网 IP**
+
+```bash
+ipconfig getifaddr en0
+# 输出: 192.168.3.x
+```
+
+**步骤 2: 修改 data.json 配置**
+
+```json
+{
+  "lightRAG": {
+    "serverUrl": "http://192.168.3.x:9621",
+    "qdrantUrl": "http://192.168.3.x:6333"
+  }
+}
+```
+
+#### 注意事项
+
+⚠️ **LightRAG Server 需要绑定可访问的 host**:
+
+```bash
+# 默认绑定 127.0.0.1（仅本地）
+--host 127.0.0.1
+
+# 远程访问需要绑定 0.0.0.0（所有接口）或 Tailscale IP
+--host 0.0.0.0
+```
+
+⚠️ **防火墙**: 确保 macOS 防火墙允许端口 9621、6333、8000。
+
+---
+
+### 配置读取示例（Agent 操作）
+
+#### 读取当前配置
+
+```bash
+# Smart RAG data.json
+cat ~/Library/CloudStorage/OneDrive-个人/应用/remotely-save/OneDrive-Vault/.obsidian/plugins/smart-rag/data.json | jq '.lightRAG'
+
+# 输出示例
+{
+  "serverUrl": "http://127.0.0.1:9621",
+  "llmModel": "LongCat-Flash-Lite",
+  "llmBaseUrl": "https://api.longcat.chat/openai/v1",
+  "llmApiKey": "ak_xxxxx",
+  ...
+}
+```
+
+#### 修改配置（切换 LLM）
+
+```bash
+# 修改 LightRAG LLM 为 LongCat
+jq '.lightRAG.llmModel = "LongCat-Flash-Lite" | 
+    .lightRAG.llmBaseUrl = "https://api.longcat.chat/openai/v1" | 
+    .lightRAG.llmApiKey = "ak_xxxxx"' \
+  data.json > data.json.tmp && mv data.json.tmp data.json
+```
+
+#### 重启服务
+
+```bash
+# 1. 停止现有进程
+lsof -ti :9621 | xargs kill -9
+lsof -ti :6333 | xargs kill -9
+
+# 2. 重新启动（使用新配置）
+# LightRAG: 见上文 "手动启动 LightRAG"
+# Qdrant: 见上文 "手动启动 Qdrant"
+```
+
+---
+
+### 常见配置问题
+
+#### 1. LightRAG SSL 错误
+
+**症状**: `SSL: RECORD_LAYER_FAILURE`
+
+**原因**: `OPENAI_API_BASE` 未设置，LightRAG 默认连接 `https://api.openai.com/v1`
+
+**解决**: 确保 `buildEnvVars()` 设置了 `OPENAI_API_BASE`。
+
+#### 2. Rate Limit 错误
+
+**症状**: `RateLimitError` 导致文档处理失败
+
+**原因**: 云端 API（如百炼）速率限制
+
+**解决**: 切换到 LongCat 或本地 LM Studio，或降低 `llmConcurrency`。
+
+#### 3. Qdrant 连接失败
+
+**症状**: `Failed to connect to Qdrant`
+
+**原因**: `qdrantUrl` 配置错误或 Qdrant 未启动
+
+**解决**: 检查 `http://127.0.0.1:6333/health`。
+
+#### 4. 远程访问失败
+
+**症状**: 手机端无法连接 Mac Mini 服务
+
+**原因**: `serverUrl` 使用 `127.0.0.1`（本地地址）
+
+**解决**: 配置 Tailscale 或局域网 IP，并修改 host 绑定。
+
+---
+
+## Windows 本地部署指南
+
+> 适用于 Windows 用户在本地安装 Smart RAG 的完整步骤。
+
+### 1. 系统要求
+
+| 项目 | 要求 |
+|------|------|
+| **操作系统** | Windows 10/11 |
+| **Obsidian** | v1.0.0+ |
+| **Python** | v3.11+ |
+| **内存** | ≥ 16GB（推荐） |
+| **硬盘** | ≥ 10GB 可用空间 |
+
+---
+
+### 2. Python 环境安装
+
+#### 方式 A：官方 Python
+
+**下载**: https://www.python.org/downloads/
+
+**安装步骤**:
+1. 下载 Python 3.11+ Windows installer
+2. 运行安装程序
+3. ✅勾选「Add Python to PATH」
+4. 安装完成后验证:
+   ```cmd
+   python --version
+   pip --version
+   ```
+
+#### 方式 B：Miniconda（推荐）
+
+**下载**: https://docs.conda.io/en/latest/miniconda.html
+
+**安装步骤**:
+1. 下载 Miniconda Windows installer
+2. 运行安装程序
+3. 创建虚拟环境:
+   ```cmd
+   conda create -n smart-rag python=3.11
+   conda activate smart-rag
+   ```
+
+---
+
+### 3. 外部服务安装
+
+#### 3.1 Qdrant（向量数据库）
+
+**Windows 安装**: Smart RAG 插件会自动下载 Qdrant Windows 二进制文件
+
+**手动安装（可选）**:
+```cmd
+# 下载 Qdrant Windows 版本
+# https://github.com/qdrant/qdrant/releases/download/v1.17.1/qdrant-x86_64-pc-windows-msvc.tar.gz
+
+# 解压到
+C:\Users\<用户名>\.openclaw\smart-rag\qdrant-bin\qdrant.exe
+```
+
+**启动命令**:
+```cmd
+C:\Users\<用户名>\.openclaw\smart-rag\qdrant-bin\qdrant.exe --config-path C:\Users\<用户名>\.openclaw\smart-rag\qdrant-config\config.yaml
+```
+
+#### 3.2 LightRAG（知识图谱）
+
+**安装命令**:
+```cmd
+pip install lightrag
+```
+
+**验证安装**:
+```cmd
+lightrag-server --help
+```
+
+**启动命令**:
+```cmd
+# 设置环境变量（PowerShell）
+$env:LLM_BINDING="openai"
+$env:LLM_MODEL="LongCat-Flash-Lite"
+$env:LLM_BINDING_HOST="https://api.longcat.chat/openai/v1"
+$env:OPENAI_API_KEY="ak_xxxxx"
+$env:OPENAI_API_BASE="https://api.longcat.chat/openai/v1"
+$env:EMBEDDING_BINDING="openai"
+$env:EMBEDDING_MODEL="text-embedding-bge-m3"
+$env:EMBEDDING_BINDING_HOST="http://127.0.0.1:1234/v1"
+$env:EMBEDDING_DIM="1024"
+$env:LIGHTRAG_VECTOR_STORAGE="NanoVectorDBStorage"
+$env:LLM_TIMEOUT="600"
+
+# 启动 LightRAG
+lightrag-server --host 127.0.0.1 --port 9621 --working-dir C:\Users\<用户名>\.openclaw\lightrag-data\smart-rag --llm-binding openai --embedding-binding openai --max-async 20 --log-level INFO
+```
+
+**CMD 环境变量格式**:
+```cmd
+set LLM_BINDING=openai
+set LLM_MODEL=LongCat-Flash-Lite
+set LLM_BINDING_HOST=https://api.longcat.chat/openai/v1
+set OPENAI_API_KEY=ak_xxxxx
+...
+```
+
+#### 3.3 RAG-Anything（文档解析）
+
+**安装命令**:
+```cmd
+pip install rag-anything
+```
+
+**额外依赖（MinerU）**:
+```cmd
+pip install magic-pdf
+```
+
+**启动命令**:
+```cmd
+python C:\Users\<用户名>\.openclaw\skills\rag-anything\rag_anything_server.py --host 127.0.0.1 --port 8000 --parser mineru --llm-base-url https://api.longcat.chat/openai/v1 --llm-api-key ak_xxxxx --llm-model LongCat-Flash-Lite --embedding-base-url http://127.0.0.1:1234/v1 --embedding-model text-embedding-bge-m3
+```
+
+---
+
+### 4. LM Studio（本地 Embedding）
+
+**下载**: https://lmstudio.ai/
+
+**安装步骤**:
+1. 下载 LM Studio Windows 版本
+2. 安装并启动 LM Studio
+3. 下载 Embedding 模型：`BGE-M3`
+4. 启动本地服务器（端口 1234）
+
+**配置 Smart RAG**:
+```json
+{
+  "lightRAG": {
+    "embeddingBaseUrl": "http://127.0.0.1:1234/v1",
+    "embeddingModel": "text-embedding-bge-m3"
+  }
+}
+```
+
+---
+
+### 5. Obsidian 插件安装
+
+**步骤**:
+1. 打开 Obsidian 设置 → 第三方插件
+2. 关闭「安全模式」
+3. 点击「浏览」→ 搜索「Smart RAG」
+4. 安装并启用
+
+**手动安装**（从 GitHub）:
+1. 下载 `main.js`, `manifest.json`, `styles.css`
+2. 复制到 `{Vault}\.obsidian\plugins\smart-rag\`
+3. 重启 Obsidian
+4. 启用插件
+
+---
+
+### 6. 配置文件路径差异
+
+| 项目 | macOS | Windows |
+|------|-------|----------|
+| 插件配置 | `{Vault}/.obsidian/plugins/smart-rag/data.json` | `{Vault}\\.obsidian\plugins\smart-rag\data.json` |
+| Qdrant 数据 | `~/.openclaw/smart-rag/qdrant-data/` | `C:\Users\<用户名>\.openclaw\smart-rag\qdrant-data\` |
+| LightRAG 数据 | `~/.openclaw/lightrag-data/smart-rag/` | `C:\Users\<用户名>\.openclaw\lightrag-data\smart-rag\` |
+| Python 虚拟环境 | `~/.openclaw/workspace/venv/` | `C:\Users\<用户名>\.openclaw\workspace\venv\` |
+
+---
+
+### 7. Windows 特有注意事项
+
+#### 7.1 防火墙配置
+
+**问题**: Windows 防火墙可能阻止端口 6333/9621/8000
+
+**解决方案**:
+```cmd
+# PowerShell（管理员权限）
+New-NetFirewallRule -DisplayName "Smart RAG Qdrant" -Direction Inbound -LocalPort 6333 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "Smart RAG LightRAG" -Direction Inbound -LocalPort 9621 -Protocol TCP -Action Allow
+New-NetFirewallRule -DisplayName "Smart RAG RAG-Anything" -Direction Inbound -LocalPort 8000 -Protocol TCP -Action Allow
+```
+
+#### 7.2 杀毒软件
+
+**问题**: 杀毒软件可能拦截 Qdrant/LightRAG 进程
+
+**解决方案**: 添加排除目录:
+- `C:\Users\<用户名>\.openclaw\`
+
+#### 7.3 路径分隔符
+
+**问题**: Windows 使用 `\`，macOS 使用 `/`
+
+**影响**: Python 代码通常兼容，但 JSON 配置需注意
+
+**建议**: Smart RAG 插件内部已处理路径差异
+
+#### 7.4 权限问题
+
+**问题**: `C:\Users` 下创建 `.openclaw` 目录可能需要权限
+
+**解决方案**:
+```cmd
+# 手动创建目录
+mkdir C:\Users\<用户名>\.openclaw
+mkdir C:\Users\<用户名>\.openclaw\smart-rag
+mkdir C:\Users\<用户名>\.openclaw\lightrag-data
+```
+
+#### 7.5 进程管理
+
+**问题**: Windows 没有 `lsof` 命令
+
+**替代命令**:
+```cmd
+# 查看端口占用
+netstat -ano | findstr :9621
+
+# 杀死进程（PID 从 netstat 获取）
+taskkill /PID <PID> /F
+```
+
+---
+
+### 8. 简化部署脚本
+
+**创建启动脚本** `start-smart-rag.bat`:
+
+```cmd
+@echo off
+echo Starting Smart RAG Services...
+
+:: 启动 Qdrant
+start "Qdrant" C:\Users\%USERNAME%\.openclaw\smart-rag\qdrant-bin\qdrant.exe --config-path C:\Users\%USERNAME%\.openclaw\smart-rag\qdrant-config\config.yaml
+
+:: 等待 Qdrant 启动
+timeout /t 5 /nobreak
+
+:: 设置 LightRAG 环境变量
+set LLM_BINDING=openai
+set LLM_MODEL=LongCat-Flash-Lite
+set LLM_BINDING_HOST=https://api.longcat.chat/openai/v1
+set OPENAI_API_KEY=ak_xxxxx
+set OPENAI_API_BASE=https://api.longcat.chat/openai/v1
+set EMBEDDING_BINDING=openai
+set EMBEDDING_MODEL=text-embedding-bge-m3
+set EMBEDDING_BINDING_HOST=http://127.0.0.1:1234/v1
+set EMBEDDING_DIM=1024
+set LIGHTRAG_VECTOR_STORAGE=NanoVectorDBStorage
+set LLM_TIMEOUT=600
+
+:: 启动 LightRAG
+start "LightRAG" lightrag-server --host 127.0.0.1 --port 9621 --working-dir C:\Users\%USERNAME%\.openclaw\lightrag-data\smart-rag --llm-binding openai --embedding-binding openai --max-async 20 --log-level INFO
+
+echo Smart RAG Services Started!
+echo Qdrant: http://127.0.0.1:6333
+echo LightRAG: http://127.0.0.1:9621
+pause
+```
+
+---
+
+### 9. 验证安装
+
+**检查服务状态**:
+```cmd
+:: Qdrant
+curl http://127.0.0.1:6333/health
+
+:: LightRAG
+curl http://127.0.0.1:9621/health
+```
+
+**如果没有 curl**:
+```cmd
+:: PowerShell
+Invoke-WebRequest -Uri http://127.0.0.1:6333/health
+Invoke-WebRequest -Uri http://127.0.0.1:9621/health
+```
+
+---
+
+### 10. 远程访问配置
+
+**Windows 局域网 IP**:
+```cmd
+ipconfig
+:: 找到 IPv4 地址，如 192.168.3.x
+```
+
+**修改配置**:
+```json
+{
+  "lightRAG": {
+    "serverUrl": "http://192.168.3.x:9621",
+    "qdrantUrl": "http://192.168.3.x:6333"
+  }
+}
+```
+
+**绑定所有接口**:
+```cmd
+:: LightRAG
+lightrag-server --host 0.0.0.0 --port 9621 ...
+```
+
+---
+
+## 版本信息
+
+- **版本**: 1.1.0
+- **作者**: Frank Zhang
+- **许可证**: MIT
+- **最后更新**: 2026-04-14
+
+---
+
+## 致谢
+
+- **Obsidian**: 知识管理平台
+- **Qdrant**: 向量数据库
+- **LightRAG**: 知识图谱引擎
+- **RAG-Anything**: 文档解析工具

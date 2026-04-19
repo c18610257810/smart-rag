@@ -21,21 +21,45 @@ const ExcalidrawMessage: React.FC<ExcalidrawMessageProps> = ({ result, onInsertT
   }, [result]);
 
   const renderDiagram = async () => {
+    console.log('[ExcalidrawMessage] renderDiagram called, result:', result)
+    // If no excalidrawJson, show text summary
     if (!result.excalidrawJson) {
+      console.log('[ExcalidrawMessage] No excalidrawJson')
+      setIsLoading(false);
+      if (result.textSummary) {
+        // Show text summary as fallback
+        setError(null);
+      }
+      return;
+    }
+
+    console.log('[ExcalidrawMessage] excalidrawJson:', result.excalidrawJson)
+    console.log('[ExcalidrawMessage] elements count:', result.excalidrawJson.elements?.length)
+
+    // If excalidrawJson has no elements, show error
+    if (!result.excalidrawJson.elements || result.excalidrawJson.elements.length === 0) {
+      console.log('[ExcalidrawMessage] No elements!')
+      setError('No diagram elements generated. LLM may have returned empty response.');
       setIsLoading(false);
       return;
     }
 
     const renderer = new ExcalidrawRenderer(app);
+    console.log('[ExcalidrawMessage] Renderer created')
     
-    if (!renderer.isAvailable()) {
+    const available = renderer.isAvailable()
+    console.log('[ExcalidrawMessage] Excalidraw available:', available)
+    
+    if (!available) {
       setError('Excalidraw plugin is not installed. Please install it from community plugins.');
       setIsLoading(false);
       return;
     }
 
     try {
+      console.log('[ExcalidrawMessage] Calling renderToPNG...')
       const renderResult = await renderer.renderToPNG(result.excalidrawJson);
+      console.log('[ExcalidrawMessage] renderResult:', renderResult)
       
       if (renderResult.error) {
         setError(renderResult.error);

@@ -8,6 +8,7 @@ import { Annotation, ResponseUsage } from './llm/response'
 import { Mentionable, SerializedMentionable } from './mentionable'
 import { ToolCallRequest, ToolCallResponse } from './tool-call.types'
 import { ExcalidrawGenerationResult } from '../services/excalidrawGenerator'
+import { DrawIoGenerationResult } from '../services/drawIoGenerator'
 
 export type ChatUserMessage = {
   role: 'user'
@@ -33,6 +34,11 @@ export type ChatAssistantMessage = {
   excalidraw?: {
     isGenerating?: boolean
     result?: ExcalidrawGenerationResult
+    error?: string
+  }
+  drawio?: {
+    isGenerating?: boolean
+    result?: DrawIoGenerationResult
     error?: string
   }
 }

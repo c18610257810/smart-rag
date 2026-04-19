@@ -9,65 +9,14 @@ import { ExcalidrawClipboard } from './excalidrawGenerator';
 
 declare global {
   interface Window {
-    ExcalidrawAutomate?: {
-      create: (options: {
-        filename?: string;
-        foldername?: string;
-        onNewPane?: boolean;
-        frontmatterKeys?: Record<string, any>;
-      }) => Promise<string>;
-      addText: (x: number, y: number, text: string, options?: {
-        id?: string;
-        color?: string;
-        fontSize?: number;
-        fontFamily?: number;
-        textAlign?: 'left' | 'center' | 'right';
-      }) => string;
-      addRectangle: (x: number, y: number, width: number, height: number, options?: {
-        id?: string;
-        color?: string;
-        fillStyle?: string;
-        strokeStyle?: string;
-        strokeWidth?: number;
-      }) => string;
-      addEllipse: (x: number, y: number, width: number, height: number, options?: {
-        id?: string;
-        color?: string;
-      }) => string;
-      addLine: (x: number, y: number, points: number[][], options?: {
-        id?: string;
-        color?: string;
-      }) => string;
-      addArrow: (x: number, y: number, points: number[][], options?: {
-        id?: string;
-        color?: string;
-        startArrowhead?: string | null;
-        endArrowhead?: string | null;
-      }) => string;
-      connectObjects: (id1: string, connectionPoint1: string, id2: string, connectionPoint2: string, options?: {
-        numberOfPoints?: number;
-        startArrowHead?: string | null;
-        endArrowHead?: string | null;
-        padding?: number;
-      }) => string;
-      createPNG: (padding?: number, scale?: number, darkMode?: boolean) => Promise<Blob | null>;
-      createSVG: (padding?: number, darkMode?: boolean) => Promise<string>;
-      getElements: () => any[];
-      getElement: (id: string) => any;
-      clear: () => void;
-      addElementsToView: (repositionToCursor?: boolean, save?: boolean, newElements?: boolean) => Promise<boolean>;
-      getViewElements: () => any[];
-      setView: (view?: any) => void;
-      targetView: any;
-      reset: () => void;
-    };
+    ExcalidrawAutomate?: any;
   }
 }
 
 export interface RenderResult {
   pngBlob: Blob | null;
   svgString: string | null;
-  file: TFile | null;
+  file: string | null;
   error?: string;
 }
 
@@ -102,107 +51,177 @@ export class ExcalidrawRenderer {
       };
     }
 
-    const ea = window.ExcalidrawAutomate!;
+    const ea = window.ExcalidrawAutomate;
+    console.log('[ExcalidrawRenderer] ExcalidrawAutomate:', ea)
+    console.log('[ExcalidrawRenderer] Available methods:', Object.keys(ea || {}))
+    
+    // Check if addText exists (required for rendering)
+    if (!ea || typeof ea.addText !== 'function') {
+      return {
+        pngBlob: null,
+        svgString: null,
+        file: null,
+        error: 'Excalidraw plugin API not compatible. Required: addText method.'
+      };
+    }
 
     try {
-      // Reset ExcalidrawAutomate state
-      ea.reset();
-
-      // Get elements from JSON
-      const elements = excalidrawJson.elements || [];
+      // Reset state
+      if (ea.reset) ea.reset();
       
-      // Add elements individually using ExcalidrawAutomate API
-      // addElementsToView doesn't accept raw elements as third param
-      for (const element of elements) {
-        switch (element.type) {
-          case 'rectangle':
-            ea.addRectangle(
-              element.x,
-              element.y,
-              element.width || 200,
-              element.height || 100,
-              {
-                id: element.id,
-                color: element.strokeColor || '#000000',
-                fillStyle: element.fillStyle,
-                strokeStyle: element.strokeStyle,
-                strokeWidth: element.strokeWidth,
-              }
-            );
-            break;
+      const elements = excalidrawJson.elements || [];
+      console.log('[ExcalidrawRenderer] Elements to render:', elements.length)
+      
+      // Add all elements (rectangle, ellipse, diamond, arrow, text)
+      for (const el of elements) {
+        try {
+          const baseProps = {
+            strokeColor: el.strokeColor || '#1e1e1e',
+            backgroundColor: el.backgroundColor || 'transparent',
+            strokeWidth: el.strokeWidth || 2,
+            fillStyle: el.fillStyle || 'solid',
+            roughness: el.roughness ?? 1,
+            opacity: el.opacity ?? 100
+          };
 
-          case 'ellipse':
-            ea.addEllipse(
-              element.x,
-              element.y,
-              element.width || 200,
-              element.height || 100,
-              { id: element.id, color: element.strokeColor || '#000000' }
-            );
-            break;
-
-          case 'text':
-            ea.addText(
-              element.x,
-              element.y,
-              element.text || '',
-              {
-                id: element.id,
-                color: element.strokeColor || '#000000',
-                fontSize: element.fontSize || 16,
-                fontFamily: element.fontFamily,
-                textAlign: element.textAlign as any,
-              }
-            );
-            break;
-
-          case 'arrow':
-          case 'line':
-            if (element.points && element.points.length >= 2) {
-              ea.addLine(
-                element.x,
-                element.y,
-                element.points,
+          if (el.type === 'rectangle') {
+            // Rectangle with optional text
+            const id = ea.addRectangle(el.x || 100, el.y || 100, {
+              width: el.width || 180,
+              height: el.height || 70,
+              ...baseProps
+            });
+            // Add text if present
+            if (el.text) {
+              ea.addText((el.x || 100) + (el.width || 180) / 2, (el.y || 100) + (el.height || 70) / 2, el.text, {
+                color: el.strokeColor || '#000000',
+                fontSize: el.fontSize || 16,
+                fontFamily: el.fontFamily || 5,
+                textAlign: 'center',
+                verticalAlign: 'middle'
+              });
+            }
+          } else if (el.type === 'ellipse') {
+            // Ellipse with optional text
+            const id = ea.addEllipse(el.x || 100, el.y || 100, {
+              width: el.width || 120,
+              height: el.height || 120,
+              ...baseProps
+            });
+            if (el.text) {
+              ea.addText((el.x || 100) + (el.width || 120) / 2, (el.y || 100) + (el.height || 120) / 2, el.text, {
+                color: el.strokeColor || '#000000',
+                fontSize: el.fontSize || 16,
+                fontFamily: el.fontFamily || 5,
+                textAlign: 'center',
+                verticalAlign: 'middle'
+              });
+            }
+          } else if (el.type === 'diamond') {
+            // Diamond shape with optional text
+            const id = ea.addDiamond(el.x || 100, el.y || 100, {
+              width: el.width || 150,
+              height: el.height || 150,
+              ...baseProps
+            });
+            if (el.text) {
+              ea.addText((el.x || 100) + (el.width || 150) / 2, (el.y || 100) + (el.height || 150) / 2, el.text, {
+                color: el.strokeColor || '#000000',
+                fontSize: el.fontSize || 14,
+                fontFamily: el.fontFamily || 5,
+                textAlign: 'center',
+                verticalAlign: 'middle'
+              });
+            }
+          } else if (el.type === 'arrow') {
+            // Arrow with optional label
+            if (el.points && el.points.length >= 2) {
+              const startX = el.x || 100;
+              const startY = el.y || 100;
+              const endX = startX + (el.points[el.points.length - 1][0] || 100);
+              const endY = startY + (el.points[el.points.length - 1][1] || 50);
+              
+              ea.addArrow(
+                [[startX, startY], [endX, endY]],
                 {
-                  id: element.id,
-                  color: element.strokeColor || '#000000',
-                  startArrowhead: element.startArrowhead || null,
-                  endArrowhead: element.endArrowhead || null,
+                  ...baseProps,
+                  startArrowhead: el.startArrowhead || null,
+                  endArrowhead: el.endArrowhead || 'arrow'
                 }
               );
             }
-            break;
-
-          case 'diamond':
-            ea.addRectangle(
-              element.x,
-              element.y,
-              element.width || 200,
-              element.height || 100,
-              { id: element.id, color: element.strokeColor || '#000000' }
-            );
-            break;
+          } else if (el.type === 'text' && el.text) {
+            // Standalone text
+            ea.addText(el.x || 100, el.y || 100, el.text, {
+              color: el.strokeColor || '#1e1e1e',
+              fontSize: el.fontSize || 20,
+              fontFamily: el.fontFamily || 5,
+              textAlign: el.textAlign || 'left',
+              verticalAlign: el.verticalAlign || 'top'
+            });
+          }
+        } catch (e) {
+          console.warn('[ExcalidrawRenderer] Failed to add element:', e, el)
         }
       }
-
-      // Generate PNG
-      const pngBlob = await ea.createPNG(50, 2, darkMode);
       
-      // Generate SVG
-      const svgString = await ea.createSVG(50, darkMode);
-
-      // Clean up
-      ea.clear();
-
+      // Try to create PNG using available methods
+      let pngBlob: Blob | null = null;
+      
+      // Method 1: Try exportPNG if available
+      if (typeof ea.exportImage === 'function') {
+        try {
+          const result = await ea.exportImage({ format: 'png' });
+          if (result && result.blob) {
+            pngBlob = result.blob;
+          }
+        } catch (e) {
+          console.warn('[ExcalidrawRenderer] exportImage failed:', e)
+        }
+      }
+      
+      // Method 2: Try create and read file
+      if (!pngBlob && typeof ea.create === 'function') {
+        try {
+          const filepath = await ea.create({
+            filename: filename || `diagram-${Date.now()}`,
+            foldername: '',
+            onNewPane: false
+          });
+          console.log('[ExcalidrawRenderer] Created file:', filepath)
+          
+          if (filepath) {
+            return {
+              pngBlob: null,
+              svgString: null,
+              file: filepath,
+              error: null
+            };
+          }
+        } catch (e) {
+          console.warn('[ExcalidrawRenderer] create failed:', e)
+        }
+      }
+      
+      if (!pngBlob) {
+        // Fallback: return success with message
+        return {
+          pngBlob: null,
+          svgString: null,
+          file: null,
+          error: 'Diagram elements added but PNG export not available. Check Excalidraw plugin version.'
+        };
+      }
+      
       return {
         pngBlob,
-        svgString,
+        svgString: null,
         file: null,
+        error: null
       };
 
     } catch (error) {
-      console.error('Failed to render Excalidraw:', error);
-      ea.clear();
+      console.error('[ExcalidrawRenderer] Render failed:', error);
       return {
         pngBlob: null,
         svgString: null,
@@ -213,121 +232,63 @@ export class ExcalidrawRenderer {
   }
 
   /**
+   * Convert blob to data URL
+   */
+  async blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  /**
    * Render and save to file
    */
   async renderAndSave(
     excalidrawJson: ExcalidrawClipboard,
     filename: string,
-    folderpath?: string,
-    darkMode?: boolean
+    folder?: string
   ): Promise<RenderResult> {
-    if (!this.isAvailable()) {
-      return {
-        pngBlob: null,
-        svgString: null,
-        file: null,
-        error: 'Excalidraw plugin is not installed or enabled.'
-      };
+    const result = await this.renderToPNG(excalidrawJson, filename);
+    
+    if (result.file) {
+      return result;
     }
-
-    const ea = window.ExcalidrawAutomate!;
-
-    try {
-      ea.reset();
-
-      // Create new drawing file
-      const filepath = await ea.create({
-        filename,
-        foldername: folderpath || 'attachments',
-        onNewPane: false,
-      });
-
-      // Add elements
-      const elements = excalidrawJson.elements || [];
-      
-      for (const element of elements) {
-        switch (element.type) {
-          case 'rectangle':
-            ea.addRectangle(
-              element.x,
-              element.y,
-              element.width || 200,
-              element.height || 100,
-              {
-                id: element.id,
-                color: element.strokeColor || '#000000',
-              }
-            );
-            break;
-
-          case 'text':
-            ea.addText(
-              element.x,
-              element.y,
-              element.text || '',
-              {
-                id: element.id,
-                color: element.strokeColor || '#000000',
-                fontSize: element.fontSize || 16,
-              }
-            );
-            break;
-
-          case 'arrow':
-            if (element.points && element.points.length >= 2) {
-              ea.addArrow(
-                element.x,
-                element.y,
-                element.points,
-                {
-                  id: element.id,
-                  color: element.strokeColor || '#000000',
-                  endArrowhead: 'arrow',
-                }
-              );
-            }
-            break;
-        }
+    
+    if (result.error) {
+      return result;
+    }
+    
+    if (result.pngBlob) {
+      // Try to save PNG
+      try {
+        const folderPath = folder || '';
+        const filePath = folderPath ? `${folderPath}/${filename}.png` : `${filename}.png`;
+        
+        // Create buffer from blob
+        const arrayBuffer = await result.pngBlob.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        
+        await this.app.vault.create(filePath, buffer);
+        
+        return {
+          pngBlob: null,
+          svgString: null,
+          file: filePath,
+          error: null
+        };
+      } catch (error) {
+        return {
+          pngBlob: null,
+          svgString: null,
+          file: null,
+          error: `Failed to save: ${error instanceof Error ? error.message : String(error)}`
+        };
       }
-
-      // Save the drawing (addElementsToView with save=true)
-      await ea.addElementsToView(false, true);
-
-      // Generate PNG
-      const pngBlob = await ea.createPNG(50, 2, darkMode);
-
-      // Get the created file
-      const file = this.app.vault.getAbstractFileByPath(filepath) as TFile;
-
-      ea.clear();
-
-      return {
-        pngBlob,
-        svgString: null,
-        file,
-      };
-
-    } catch (error) {
-      console.error('Failed to render and save Excalidraw:', error);
-      ea.clear();
-      return {
-        pngBlob: null,
-        svgString: null,
-        file: null,
-        error: `Failed to save diagram: ${error instanceof Error ? error.message : String(error)}`
-      };
     }
-  }
-
-  /**
-   * Convert blob to base64 data URL
-   */
-  blobToDataUrl(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
+    
+    return result;
   }
 }
