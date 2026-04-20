@@ -374,6 +374,9 @@ export default class SmartRAGPlugin extends Plugin {
 			embeddingBaseUrl: s.lightRAG.embeddingBaseUrl,
 			embeddingApiKey: s.lightRAG.embeddingApiKey,
 			embeddingDim: s.lightRAG.embeddingDim,
+			// Vector storage
+			vectorStorage: s.lightRAG.vectorStorage,
+			qdrantUrl: s.lightRAG.qdrantUrl,
 			// Options
 			llmConcurrency: s.lightRAG.llmConcurrency,
 			embeddingConcurrency: s.lightRAG.embeddingConcurrency,
