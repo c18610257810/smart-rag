@@ -154,8 +154,21 @@ Example call:
 3. Equal spacing between all shapes (horizontal and vertical)
 4. Fill canvas evenly - not loose, not exceeding boundaries
 5. All elements horizontally aligned, vertical centerlines aligned
-6. Connectors: straight lines, orthogonal corners (90\xB0), no crossing, equal spacing
+6. **STRICT ORTHOGONAL ROUTING**: All connectors MUST use edgeStyle=orthogonalEdgeStyle
+   - ONLY horizontal and vertical segments (NO diagonal lines, NO curves)
+   - ALL corners must be EXACT 90\xB0 angles (strict right turns)
+   - Connectors snap to grid (gridSize=10)
+   - No crossing or overlapping
+   - Equal spacing between parallel connector lines
 7. Connectors do NOT overlay on other elements
+8. **GRID ALIGNMENT**: All coordinates must be multiples of 10 (gridSize)
+   - x, y, width, height all divisible by 10
+   - Shapes and connectors align to grid points
+9. **EDGE STYLE TEMPLATE**: Use this exact style for ALL edges:
+   style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=2;"
+   - rounded=0 (no curved corners on connectors)
+   - orthogonalLoop=1 (enable orthogonal routing)
+   - jettySize=auto (automatic segment length calculation)
 
 XML RULES:
 1. Generate ONLY mxCell elements - NO wrapper tags (<mxfile>, <mxGraphModel>, <root>)
@@ -168,7 +181,8 @@ XML RULES:
 
 Notes:
 - For AWS diagrams, use AWS 2025 icons
-- For animated connectors, add "flowAnimation=1" to edge style
+- For animated connectors, add "flowAnimation=1" to edge style (but keep orthogonalEdgeStyle)
+- **NEVER use curved edges** - always orthogonal (rounded=0)
 - Generate edge mxCells BEFORE vertex mxCells
 
 DO NOT call this tool without providing the 'xml' parameter!`,inputSchema:r.object({xml:r.string().describe("XML string containing mxCell elements. REQUIRED - must not be empty.")})}},maxRetries:3});console.log("[DrawIoGeneratorAI] Result object:",{hasToolCalls:!!n.toolCalls,toolCallsCount:n.toolCalls?.length||0,hasText:!!n.text,textLength:n.text?.length||0});let G=n.toolCalls;if(console.log("[DrawIoGeneratorAI] ToolCalls raw:",JSON.stringify(G,null,2)),G&&G.length>0){for(let b of G)if(console.log("[DrawIoGeneratorAI] ToolCall full structure:",b),console.log("[DrawIoGeneratorAI] ToolCall keys:",Object.keys(b)),console.log("[DrawIoGeneratorAI] toolCall.toolName:",b.toolName),console.log("[DrawIoGeneratorAI] toolCall.args:",b.args),console.log("[DrawIoGeneratorAI] toolCall.args type:",typeof b.args),b.toolName==="display_diagram"){let s;if(console.log("[DrawIoGeneratorAI] Trying to extract XML from toolCall..."),console.log("[DrawIoGeneratorAI] toolCall.input:",JSON.stringify(b.input)),b.input&&typeof b.input=="object"&&"xml"in b.input&&(console.log("[DrawIoGeneratorAI] Found xml in toolCall.input"),s=b.input.xml),!s&&b.input&&typeof b.input=="object"&&Object.keys(b.input).length===0&&console.log("[DrawIoGeneratorAI] toolCall.input is empty object {} - model did not fill arguments"),!s&&b.function&&b.function.arguments){console.log("[DrawIoGeneratorAI] Found in toolCall.function.arguments (string)");try{s=JSON.parse(b.function.arguments).xml,console.log("[DrawIoGeneratorAI] Parsed arguments, xml length:",s?.length)}catch(m){console.log("[DrawIoGeneratorAI] Failed to parse function.arguments:",m)}}if(!s&&b.args&&b.args.xml&&(console.log("[DrawIoGeneratorAI] Found in toolCall.args.xml"),s=b.args.xml),!s&&b.arguments){console.log("[DrawIoGeneratorAI] Found in toolCall.arguments (string)");try{s=JSON.parse(b.arguments).xml}catch(m){console.log("[DrawIoGeneratorAI] Failed to parse arguments:",m)}}if(!s){console.log("[DrawIoGeneratorAI] Could not extract XML from toolCall"),console.log("[DrawIoGeneratorAI] This may mean the model called the tool but did not fill the xml parameter");continue}return console.log("[DrawIoGeneratorAI] Got XML from display_diagram, length:",s.length),this.state.previousXml=this.state.currentXml,this.state.currentXml=this.wrapInMxGraphModel(s),{success:!0,xml:this.state.currentXml}}}let d=n.text;if(console.log("[DrawIoGeneratorAI] No tool called, trying to extract from text..."),console.log("[DrawIoGeneratorAI] Response text length:",d?.length||0),d){let b=this.extractXmlFromText(d);if(b)return console.log("[DrawIoGeneratorAI] Extracted XML from text, length:",b.length),this.state.previousXml=this.state.currentXml,this.state.currentXml=b,{success:!0,xml:b}}return{success:!1,xml:null,error:"No diagram generated. LLM response: "+(d?.substring(0,100)||"empty")}}catch(l){return console.error("[DrawIoGeneratorAI] Generation failed:",l),{success:!1,xml:null,error:`Failed to generate: ${l instanceof Error?l.message:String(l)}`}}}async edit(e){try{if(console.log("[DrawIoGeneratorAI] Starting edit..."),!this.state.currentXml)return{success:!1,xml:null,error:"No current diagram to edit"};let t=V1({baseURL:this.baseUrl,apiKey:this.apiKey,fetch:async(d,b)=>{console.log("[DrawIoGeneratorAI] edit fetch called:",d.toString().substring(0,50));let s;b.body&&(typeof b.body=="string"?s=b.body:s=JSON.stringify(b.body));try{let m=await(0,ES.requestUrl)({url:d.toString(),method:b.method||"POST",headers:{"Content-Type":"application/json",...b.headers||{}},body:s,throw:!1}),i=new Headers;if(m.headers)for(let[Z,u]of Object.entries(m.headers))i.set(Z,u);return{ok:m.status>=200&&m.status<300,status:m.status,statusText:m.status.toString(),headers:i,json:async()=>m.json,text:async()=>m.text}}catch(m){throw console.error("[DrawIoGeneratorAI] edit requestUrl error:",m),m}}}).chat(this.modelId),a=this.getSystemPrompt(),c=this.getXmlContext(),G=(await hS({model:t,system:`${a}
@@ -217,7 +231,7 @@ ${this.state.previousXml}
 ${this.state.currentXml}
 """
 
-IMPORTANT: The "Current diagram XML" is the SINGLE SOURCE OF TRUTH. Always count and describe elements based on the CURRENT XML, not on what you previously generated.`:"";return e+l}wrapInMxGraphModel(e){return e.includes("<mxGraphModel>")?e:(e=e.replace(/[“”]/g,'"'),e=e.replace(/[‘’]/g,"'"),`<mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="800" pageHeight="600" math="0" shadow="0">
+IMPORTANT: The "Current diagram XML" is the SINGLE SOURCE OF TRUTH. Always count and describe elements based on the CURRENT XML, not on what you previously generated.`:"";return e+l}wrapInMxGraphModel(e){return e.includes("<mxGraphModel>")?e:(e=e.replace(/[“”]/g,'"'),e=e.replace(/[‘’]/g,"'"),`<mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="800" pageHeight="600" math="0" shadow="0" snap="1">
   <root>
     <mxCell id="0"/>
     <mxCell id="1" parent="0"/>

@@ -179,8 +179,21 @@ Example call:
 3. Equal spacing between all shapes (horizontal and vertical)
 4. Fill canvas evenly - not loose, not exceeding boundaries
 5. All elements horizontally aligned, vertical centerlines aligned
-6. Connectors: straight lines, orthogonal corners (90°), no crossing, equal spacing
+6. **STRICT ORTHOGONAL ROUTING**: All connectors MUST use edgeStyle=orthogonalEdgeStyle
+   - ONLY horizontal and vertical segments (NO diagonal lines, NO curves)
+   - ALL corners must be EXACT 90° angles (strict right turns)
+   - Connectors snap to grid (gridSize=10)
+   - No crossing or overlapping
+   - Equal spacing between parallel connector lines
 7. Connectors do NOT overlay on other elements
+8. **GRID ALIGNMENT**: All coordinates must be multiples of 10 (gridSize)
+   - x, y, width, height all divisible by 10
+   - Shapes and connectors align to grid points
+9. **EDGE STYLE TEMPLATE**: Use this exact style for ALL edges:
+   style=\"edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#000000;strokeWidth=2;\"
+   - rounded=0 (no curved corners on connectors)
+   - orthogonalLoop=1 (enable orthogonal routing)
+   - jettySize=auto (automatic segment length calculation)
 
 XML RULES:
 1. Generate ONLY mxCell elements - NO wrapper tags (<mxfile>, <mxGraphModel>, <root>)
@@ -193,7 +206,8 @@ XML RULES:
 
 Notes:
 - For AWS diagrams, use AWS 2025 icons
-- For animated connectors, add "flowAnimation=1" to edge style
+- For animated connectors, add "flowAnimation=1" to edge style (but keep orthogonalEdgeStyle)
+- **NEVER use curved edges** - always orthogonal (rounded=0)
 - Generate edge mxCells BEFORE vertex mxCells
 
 DO NOT call this tool without providing the 'xml' parameter!`,
@@ -533,7 +547,7 @@ IMPORTANT: The "Current diagram XML" is the SINGLE SOURCE OF TRUTH. Always count
     xml = xml.replace(/[“”]/g, '"'); // " and " -> "
     xml = xml.replace(/[‘’]/g, "'"); // ' and ' -> '
     
-    return `<mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="800" pageHeight="600" math="0" shadow="0">
+    return `<mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="800" pageHeight="600" math="0" shadow="0" snap="1">
   <root>
     <mxCell id="0"/>
     <mxCell id="1" parent="0"/>
